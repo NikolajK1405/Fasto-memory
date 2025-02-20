@@ -1,0 +1,5 @@
+fun int fibRec(int n) = n
+
+fun int main() =
+  let n = read(int) in
+  write(fibRec(n))
