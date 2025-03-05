@@ -141,6 +141,60 @@ let dynalloc (size_reg : reg,
 
     code1 @ code2 @ code3
 
+(* code for saving and restoring callee-saves registers 
+    (moved up in code to use with callClang func, used to be between compileDec and getArgs) *)
+let rec stackSave (currentReg  : int)
+                  (maxReg      : int)
+                  (savecode    : Instruction list)
+                  (restorecode : Instruction list)
+                  (offset      : int)
+                : (Instruction list * Instruction list * int) =
+    if currentReg > maxReg
+    then (savecode, restorecode, offset)  (* done *)
+    else let noffset = offset-4 (* adjust offset *)
+         // printfn "saving %d at %d\n" currentReg noffset
+         stackSave (currentReg+1)
+                   maxReg
+                   (SW (RN currentReg, Rsp, noffset)
+                    :: savecode) (* save register *)
+                   (LW (RN currentReg, Rsp, noffset)
+                    :: restorecode) (* restore register *)
+                   noffset (* next offset *)
+
+(* Save registers x28 - x31, since these are caller saved in clang, but not in Fasto compiler*)
+let callClang (clangFunc : Instruction list) : Instruction list =
+    let (savecode, restorecode, offset) = stackSave 28 31 [] [] 0
+    [SW (Rra, Rsp, -4)]        (* save return addr *)
+  @ savecode
+  @ [ADDI (Rsp,Rsp, offset-4)] (* Adjust Rsp*)
+  @ clangFunc                  (* Call function *)
+  @ [ADDI (Rsp,Rsp,-offset+4)] (* Adjust Rsp*)
+  @ restorecode
+  @ [LW (Rra, Rsp, -4)]        (* restore return addr *)
+
+let allocate (size_reg : reg,
+              place    : reg,
+              ty       : Type     )
+            : Instruction list =
+
+    (* get element size *)
+    let size =
+        match getElemSize ty with
+          | ESByte ->  1
+          | ESWord -> 4
+
+    (* Move function arguments into registers*)
+    let code1 = [ MV (Ra0, size_reg) 
+                ; LI (Ra1, size)]
+
+    (* Call allocate *)
+    let code2 = callClang [JAL ("allocate", [Ra0; Ra1])]
+
+    (* Move returned pointer to return register *)
+    let code3 = [ MV (place, Rrv) ]
+
+    code1 @ code2 @ code3
+
 (* Passing arguments to called function *)
 (* For each register 'r' in 'args', copy them to registers from
    'minReg' and counting up. Assumes that all args will fit into
@@ -468,7 +522,7 @@ let rec compileExp  (e      : TypedExp)
                         ]
       n_code
        @ checksize
-       @ dynalloc (size_reg, place, Int)
+       @ allocate (size_reg, place, Int) // Testing allocate
        @ init_regs
        @ loop_header
        @ loop_iota
@@ -768,25 +822,6 @@ and compileDec  (dec : TypedDec)
       let code = compileExp e vtable t
       let new_vtable = SymTab.bind s t vtable
       (code, new_vtable)
-
-(* code for saving and restoring callee-saves registers *)
-let rec stackSave (currentReg  : int)
-                  (maxReg      : int)
-                  (savecode    : Instruction list)
-                  (restorecode : Instruction list)
-                  (offset      : int)
-                : (Instruction list * Instruction list * int) =
-    if currentReg > maxReg
-    then (savecode, restorecode, offset)  (* done *)
-    else let noffset = offset-4 (* adjust offset *)
-         // printfn "saving %d at %d\n" currentReg noffset
-         stackSave (currentReg+1)
-                   maxReg
-                   (SW (RN currentReg, Rsp, noffset)
-                    :: savecode) (* save register *)
-                   (LW (RN currentReg, Rsp, noffset)
-                    :: restorecode) (* restore register *)
-                   noffset (* next offset *)
 
 (* add function arguments to symbol table *)
 and getArgs  (parms   : Param list)

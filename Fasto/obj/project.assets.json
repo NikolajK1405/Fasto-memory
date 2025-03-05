@@ -238,11 +238,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "/Users/nikolajkrarup/Documents/DocsNikospro/Kode/IP/GProj/fasto/Fasto/Fasto.fsproj",
+      "projectUniqueName": "/Users/nikolajkrarup/Documents/Noter/Bachelor/Kode/Fasto-memory/Fasto/Fasto.fsproj",
       "projectName": "Fasto",
-      "projectPath": "/Users/nikolajkrarup/Documents/DocsNikospro/Kode/IP/GProj/fasto/Fasto/Fasto.fsproj",
+      "projectPath": "/Users/nikolajkrarup/Documents/Noter/Bachelor/Kode/Fasto-memory/Fasto/Fasto.fsproj",
       "packagesPath": "/Users/nikolajkrarup/.nuget/packages/",
-      "outputPath": "/Users/nikolajkrarup/Documents/DocsNikospro/Kode/IP/GProj/fasto/Fasto/obj/",
+      "outputPath": "/Users/nikolajkrarup/Documents/Noter/Bachelor/Kode/Fasto-memory/Fasto/obj/",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "/Users/nikolajkrarup/.nuget/NuGet/NuGet.Config"

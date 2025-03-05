@@ -4,7 +4,7 @@ extern void printInt(int);
 int fibRec(int x) {
   if (x <= 0) return 0;
   if (x == 1) return 1;
-  
+  int cnt++;
   return fibRec(x - 1) + fibRec(x - 2);
 }
 
@@ -27,6 +27,7 @@ int main() {
     
   printInt(fibRec(x));
   printInt(fibIter(x));
+  printInt(cnt);
     
   return 0;
 }
