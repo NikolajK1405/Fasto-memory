@@ -1,3 +1,4 @@
+	.text
 allocateHeap: #Use sbreak systemcall to allocate heap space
 	li 		a7, 9		# Load sbreak syscall into a7
 	ecall				# Allocate heap size form a0

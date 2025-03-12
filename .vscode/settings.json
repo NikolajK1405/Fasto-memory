@@ -4,6 +4,7 @@
         "ios": "c",
         "*.tcc": "c",
         "cstdlib": "c",
-        "source_location": "c"
+        "source_location": "c",
+        "assert.h": "c"
     }
 }
