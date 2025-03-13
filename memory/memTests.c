@@ -3,15 +3,20 @@
 #include <string.h>
 #include <stdlib.h>
 
-struct heapStruct
-{   // The freelist pointer points to a memory block, where first 4 bytes are block size. Thats why its a int pointer.
-    // It should be noted that the second field is overloaded. When the block is free it contains pointer to the next block,
-    // however when allocated, it will contain the "Fasto size" following the fasto conventions.
-    int *freelist; 
+// Memory block
+struct block {
+    int size;           // Size of entire block
+    struct block *next; // Pointer to next block, when allocated will contain fasto size (overloaded field)
+    char data[]; 
+};
+
+struct heapStruct {   
+    struct block *freelist; 
     char *heapStart;
     char *heapEnd;
     int heapSize;
 };
+
 static struct heapStruct hs = { 0, 0, 0, 1000 };
 struct heapStruct *hsp = &hs;
 
@@ -30,40 +35,41 @@ int *allocate(int n, int typeSize) {
     if (hsp->heapStart == 0) { // If heap is not initialized, do so
         hsp->heapStart = allocateHeap(hsp->heapSize);
         hsp->heapEnd = hsp->heapStart + hsp->heapSize - 1;
-        hsp->freelist = (int *)hsp->heapStart;
-        *(hsp->freelist) = hsp->heapSize;
-        *(hsp->freelist+1) = 0;
+        struct block *bp = (struct block *)hsp->heapStart;
+        bp->size = hsp->heapSize;
+        bp->next = 0;
+        hsp->freelist = bp;
     }
     int size = n * typeSize + 8; // Make room for size header, and fasto size header
     size = (size + 3) & ~3;      // In case typeSize is 1, round up to be multiple of word size (4)
-    int *prev = 0;
-    int *curr = hsp->freelist; //Curr should be int pointer, since first 8 bytes of a block are two ints
+    struct block *prev = 0;
+    struct block *curr = hsp->freelist; // get first block in freelist
     int currSize = 0;
     
     while (curr != 0) {
         printf("Looking trough freelist...\n");
-        currSize = *curr; 
+        currSize = curr->size; 
         printf("Current free block size: %d\n", currSize);
         if (currSize > size + 8) {// if bigger than n+2*wordSize, split block
             printf("Big block found, splitting block...\n");
-            *curr -= size;
-            curr = (int *) ((char *) curr + (currSize - size)); // Change current to lower part of block, we cast to
-            *curr = size;   // Set size field                       byte pointer to perform byte size calulation and then back to int *
-            *(curr+1) = n;  // Change "next block pointer" field to fasto size field
-            return curr+1;  // Return pointer to fasto size field
+            curr->size -= size;
+            curr = (struct block *) (((char *)curr) + curr->size); // Change current to lower part of block, we cast to
+            curr->size = size;   // Set size field                       byte pointer to perform byte size calulation and then back to int *
+            curr->next = (struct block *)n;  // Change next field to fasto size field
+            return (int *)(&curr->next);  // Return pointer to fasto size field
         } else if (currSize >= size) { // Perfect fit
             printf("Found perfect fit!\n");
             if (prev == 0) {  // Match is first block
-                hsp->freelist = *(int **)(curr+1); // Free list pointer points to the next block
+                hsp->freelist = curr->next; // Free list pointer points to the next block
             }
             else {
-                *(prev+1) = *(curr+1);  // Previous pointer points to next block
+                prev->next = curr->next;  // Previous pointer points to next block
             }
-            *(curr+1) = n;  // Change "next block pointer" field to fasto size field
-            return curr+1;  // Return pointer to fasto size field
+            curr->next = (struct block *)n;  // Change next field to fasto size field
+            return (int *)(&curr->next);  // Return pointer to fasto size field
         } else { // Get next block from free list
             prev = curr;
-            curr = *(int **)(curr+1); // Load next block, since curr+4 is a pointer to a pointer we cast to char **
+            curr = curr->next; // Load next block, since curr+4 is a pointer to a pointer we cast to char **
         }
     }
     printf("No available space :(\n");
@@ -72,8 +78,12 @@ int *allocate(int n, int typeSize) {
 
 // TODO, error handling
 void deallocate(int *ptr) {
-    *(int **)ptr = hsp->freelist; 
-    hsp->freelist = ptr-1;
+    // OBS! Using pointer arithmetic, be careful if extending block structs.
+    // Running from C (on a 64-bit system), pointer is 8 bytes, and is 8 byte alligned, so we subtract 8
+    // In risc-v (32 bit system), we only need 4, as int a pointer is same size
+    struct block *bp = (struct block *)(struct block *)((char *)ptr - 8); 
+    bp->next = hsp->freelist;
+    hsp->freelist = bp;
 }
 
 void freeHeap() {

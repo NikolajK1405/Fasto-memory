@@ -14,18 +14,13 @@ type Exp<'T> =
     Constant  of Value
   | ArrayLit  of Exp<'T> list * 'T
   | Plus  of Exp<'T> * Exp<'T>
-  | Minus of Exp<'T> * Exp<'T>
-  | Times  of Exp<'T> * Exp<'T>
-  | Divide of Exp<'T> * Exp<'T> 
   | Let   of Dec<'T> * Exp<'T>
   | Index of string * Exp<'T> * 'T
   | Length of Exp<'T> * 'T
-  | Iota   of Exp<'T>
 
 and Dec<'T> =
     Dec of string * Exp<'T>
 
-type UntypedExp = Exp<unit>
 type TypedExp = Exp<Type>
 
 (* ----------------------------------------------------------------------- *)
@@ -101,7 +96,7 @@ let rec compileExp  (e      : TypedExp)
     let arraylit = ArrayLit(List.map (fun v -> Constant (v)) vs, tp)
     compileExp arraylit vtable
   | ArrayLit (elems, tp) ->
-    
+
 
 (*
     Constant  of Value

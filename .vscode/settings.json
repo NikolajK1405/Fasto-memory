@@ -5,6 +5,12 @@
         "*.tcc": "c",
         "cstdlib": "c",
         "source_location": "c",
-        "assert.h": "c"
+        "assert.h": "c",
+        "array": "c",
+        "span": "c",
+        "string": "c",
+        "string_view": "c",
+        "vector": "c",
+        "ranges": "c"
     }
 }
