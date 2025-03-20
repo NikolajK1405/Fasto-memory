@@ -11,6 +11,20 @@
         "string": "c",
         "string_view": "c",
         "vector": "c",
-        "ranges": "c"
+        "ranges": "c",
+        "string.h": "c",
+        "__hash_table": "c",
+        "__tree": "c",
+        "deque": "c",
+        "map": "c",
+        "memory": "c",
+        "unordered_map": "c",
+        "memory_resource": "c",
+        "scoped_allocator": "c",
+        "sstream": "c",
+        "any": "c",
+        "future": "c",
+        "syncstream": "c",
+        "valarray": "c"
     }
 }
