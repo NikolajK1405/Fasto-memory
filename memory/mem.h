@@ -9,7 +9,6 @@
 #if DEBUG == 1
     #include <stdio.h>
     #include <stdlib.h>
-    #include <stddef.h>
     
     #define dprintf(...) printf(__VA_ARGS__)
     
@@ -21,7 +20,7 @@
     extern char* allocateHeap(int);
     extern void printInt(int);
 #endif
-
+#include <stddef.h>
 int *allocate(int n, int typeSize);
 void deallocate(int *ptr);
 

@@ -80,12 +80,7 @@ int *allocate(int n, int typeSize) {
 
 // TODO, error handling
 void deallocate(int *ptr) {
-    // OBS! Using pointer arithmetic in RISC-V mode (DEBUG == 0), be careful if extending block structs.
-    #if DEBUG == 1
-        struct block *bp = (struct block *)(((char *)ptr) - offsetof(struct block, next));
-    #else
-        struct block *bp = (struct block *)(((char *)ptr) - 4); 
-    #endif
+    struct block *bp = (struct block *)(((char *)ptr) - offsetof(struct block, next));
     bp->next = hsp->freelist;
     hsp->freelist = bp;
 }
