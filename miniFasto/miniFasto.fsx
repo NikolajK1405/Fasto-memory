@@ -38,7 +38,8 @@ type reg  = string
 type imm  = int
 type addr = string
 
-let R0 : reg = "x_0"
+let R0 : reg = "x_0" (* Always zero reg*)
+let Rret : reg = "xRet" (* Return reg *)
 
 (* Pseudo Risc-v instructions*)
 type PseudoRV =
@@ -59,6 +60,9 @@ type PseudoRV =
   | ALLOC of reg*reg    (* ALLOC(rd,rs):    rd = adress of rs allocated words *)
   | FREE  of reg        (* FREE(rs):        free allocated memory of rs adress *)
 
+  | CALL  of addr
+  | RET
+
 let mutable counter = 1
 let newName name =
     counter <- counter + 1
@@ -67,6 +71,8 @@ let newName name =
 let newReg name = newName ("x" + name)
 let newLab name = newName ("l." + name)
 
+let getArgReg (i : int) (fname : string) = fname + "_arg_" + string i
+let getFname fname : addr = "f."+ fname
 (* ----------------------------------------------------------------------- *)
 (* Symbol table *)
 type SymTab<'a> = SymTab of (string * 'a) list
@@ -90,11 +96,11 @@ type FunTable  = SymTab<FunDec>
 
 (* ----------------------------------------------------------------------- *)
 (* Interpretor *)
-let rec bindParams (fargs : Param list) (args : Value list) (fid : string)=
+let rec bindParamsI (fargs : Param list) (args : Value list) (fid : string)=
     match fargs, args with
     | [], [] -> empty ()
     | Param (n, t)::ps, v::vs ->
-        let vtab = bindParams ps vs fid
+        let vtab = bindParamsI ps vs fid
         if (valueType v) = t then
           match lookup n vtab with
           | None -> bind n v vtab
@@ -154,12 +160,15 @@ let rec evalExp (e : TypedExp) (vtab : VarTableI) (ftab : FunTable): Value =
 
 and callFun (fn : FunDec) (args : Value list) (vtab : VarTableI) (ftab : FunTable) =
     let (FunDec(fid, t, fargs, e)) = fn
-    let nvtab = combine (bindParams fargs args fid) vtab
+    let nvtab = combine (bindParamsI fargs args fid) vtab
     let res = evalExp e nvtab ftab
     if (valueType res) = t then res
     else failwith (sprintf "Result of function %s: %A, does not match expected output: %A" fid (valueType res) t)
 (* ----------------------------------------------------------------------- *)
 (* Code generator *)
+
+(* Risc-v program is a map of function names with arguments and a list of instructions*)
+type RVProg = Map<string, reg list * PseudoRV list>
 
 let rec compileExp  (e      : TypedExp)
                     (vtable : VarTableC)
@@ -173,7 +182,10 @@ let rec compileExp  (e      : TypedExp)
     (* Turn into arraylit to reuse code *)
     let arraylit = ArrayLit(List.map (fun v -> Constant (v)) vs, tp)
     compileExp arraylit vtable place
-  | Var (id) -> []
+  | Var (id) -> 
+    match lookup id vtable with
+    | Some reg -> [ MV(place, reg) ]
+    | None -> failwith (sprintf "Unkown variable %s" id)
   | ArrayLit (elems, tp) ->
     let sizeReg = newReg "size"
     let addrReg = newReg "addr"
@@ -244,26 +256,56 @@ let rec compileExp  (e      : TypedExp)
     code1 @ [BEQ (cond, R0, elseLabel); LABEL thenLabel] @ code2  @
       [ J endLabel; LABEL elseLabel ] @
       code3 @ [LABEL endLabel]
-  | Apply (f, es) -> []
+  | Apply (f, es) -> 
+    (* Compile each argument expression, place in the symbolic argument registers *)
+    let argsCode = es
+                   |> List.mapi (fun i e -> compileExp e vtable (getArgReg i f)) 
+                   |> List.concat
+    argsCode @ [CALL f; MV(place, Rret)]
+
+let compileFun (fn : FunDec) : (string * (reg list * PseudoRV list)) =
+    let (FunDec (fname, tp, args, exp)) = fn
+    (* Get function label *)
+    let funLab = getFname fname
+    (* Bind each formal argument to the symbolic argument registers 
+       We use a list.fold to accumulate the vtable along with a counter 
+       for generation of argument registers *)
+    let (_, vtab, argRegs) = 
+        args 
+        |> List.fold (fun (i, tab, regs) (Param (arg, _)) -> 
+         let regName = getArgReg i fname
+         (i+1, bind arg regName tab, regs@[regName])) 
+         (0, empty(), [])
+    (* Compile expression using argument registers and place in return register *)
+    let fCode = compileExp exp vtab Rret
+    (fname, (argRegs, [LABEL funLab] @ fCode @ [RET]))
+
+(* Each function returns an element of a map, a function name and argument registers with the function code *)
+let compileProg (prog : Prog) : RVProg =
+    counter <- 1
+    List.map compileFun prog 
+    |> Map.ofList
 
 (* ----------------------------------------------------------------------- *)
 (* RISC-V simulator *)
 
 type Registers = Map<reg, int>
-let mutable regs: Registers = Map.empty |> Map.add R0 0 (* Init with R0 register *)
 
-let lookupReg reg  = 
+let lookupReg (reg: reg) (regs : Registers)  = 
     let res = regs.TryFind reg
     match res with 
     | Some x -> x
     | None -> failwith (sprintf "No such register %s" reg)
 
-let updateReg reg x =
-    regs <- regs.Add (reg, x)
+let updateReg (reg: reg) (x : int) (regs : Registers) =
+    regs.Add (reg, x)
+
+let lookupFun (prog : RVProg) (fname : addr) =
+    match prog.TryFind fname with
+    | Some fn -> fn
+    | None -> failwith (sprintf "Unkown function: %s" fname)
 
 type Heap = Map<int, array<int>> (* each allocated array has an adress (int) and a corresponding array*)
-let mutable heap: Heap = Map.empty
-let mutable hp = 0
 let offsetSize = 1000 (* Max array size 999 *)
 let splitAddr addr = 
     let block  = addr / offsetSize (* strip of 3 least significant digits to get the Map key for the array *) 
@@ -272,80 +314,209 @@ let splitAddr addr =
 
 let joinAddr block offset = (* optional offset *)
     block * offsetSize + offset
-let lookUpHeap addr =
+let lookUpHeap (addr : int) (heap : Heap) =
     let (block, offset) = splitAddr addr
     let array = match heap.TryFind block with
                 | Some arr -> arr
                 | None -> failwith (sprintf "No allocated block: %i" block)
     (array, offset) (* return array and offset *)
 
-let writeHeap addr word = 
-    let (array, offset) = lookUpHeap addr
+let writeHeap (addr : int) (word : int) (heap : Heap) = 
+    let (array, offset) = lookUpHeap addr heap
     array.[offset] <- word
 
-let readHeap addr = 
-    let (array, offset) = lookUpHeap addr
+let readHeap (addr : int) (heap : Heap) = 
+    let (array, offset) = lookUpHeap addr heap
     array.[offset]
 
+(* Search trough Risc-V program and return code from label and onward *)
+let rec getLabCode (fcode : PseudoRV list) (lab : addr) =
+    match fcode with
+    | (LABEL l)::vs when l = lab -> vs
+    | v::vs -> getLabCode vs lab
+    | [] -> failwith (sprintf "Unkown label %s" lab)
 
-(* TODO add pc for future, needed for loops and if statements *)
-let simulateInst (ins : PseudoRV) =
-    //printfn "Simulating instruction: %A" ins
-    match ins with
-    | LI (r, i) -> 
-      updateReg r i
-    | MV (rd, rs) -> 
-      let rsVal = lookupReg rs
-      updateReg rd rsVal
-    | ADDI (rd, rs, i) ->
-      let rsVal = lookupReg rs
-      updateReg rd (rsVal + i)
-    | ADD (rd, r1, r2) ->
-      let r1val = lookupReg r1
-      let r2val = lookupReg r2
-      updateReg rd (r1val + r2val)
-    | LW (rd, rs, i) ->
-      let rsVal = lookupReg rs
-      let word = readHeap (rsVal + i)
-      updateReg rd word
-    | SW (rd, rs, i) -> 
-      let rsVal = lookupReg rs
-      let rdVal = lookupReg rd
-      writeHeap (rsVal + i) rdVal
-    | ALLOC (rd, rs) ->
-      let rsVal = lookupReg rs
-      (* create array in heap map object, init first word to store length *)
-      heap <- heap.Add (hp, Array.init (rsVal + 1) (fun x -> if x = 0 then rsVal else 0))
-      (* the adress is array number + 3 zeroes *)
-      updateReg rd (joinAddr hp 0)
-      hp <- hp + 1
-    | FREE (rs) ->
-      let (blockKey, _) = splitAddr (lookupReg rs)
-      if heap.ContainsKey blockKey then
-        heap <- heap.Remove blockKey
-      else failwith (sprintf "Tried freeing non allocated block: %i" blockKey)
+let simulate (prog : RVProg) : (int * Heap) =
+    (* Initialize heap *)
+    let mutable heap: Heap = Map.empty
+    let mutable hp = 0
+    (* Simulate a function with argument registers and value, return the return-value *)
+    let rec simulateFun (regArgs : reg list, fcode : PseudoRV list) (valArgs : int list) : int =
+        let mutable regs: Registers = Map.empty |> Map.add R0 0 (* Init with R0 register *)
+        
+        (* For each formal parameter, load in the given argument 
+           TODO: Maybe add proper error handling *)
+        (regArgs, valArgs) ||> List.iter2 (fun r x -> 
+                                            regs <- updateReg r x regs)
+        
+        (* simulateInst can mutate register bank and heap *)
+        let simulateInst (ins : PseudoRV) : addr option =
+            //printfn "Simulating instruction: %A" ins
+            match ins with
+            | LABEL (_) -> None
+            | LI (r, i) -> 
+              regs <- updateReg r i regs
+              None
+            | MV (rd, rs) -> 
+              let rsVal = lookupReg rs regs
+              regs <- updateReg rd rsVal regs
+              None
+            | ADDI (rd, rs, i) ->
+              let rsVal = lookupReg rs regs
+              regs <- updateReg rd (rsVal + i) regs
+              None
+            | ADD (rd, r1, r2) ->
+              let r1val = lookupReg r1 regs
+              let r2val = lookupReg r2 regs
+              regs <- updateReg rd (r1val + r2val) regs
+              None
+            | LW (rd, rs, i) ->
+              let rsVal = lookupReg rs regs
+              let word = readHeap (rsVal + i) heap
+              regs <- updateReg rd word regs
+              None
+            | SW (rd, rs, i) -> 
+              let rsVal = lookupReg rs regs
+              let rdVal = lookupReg rd regs
+              writeHeap (rsVal + i) rdVal heap
+              None
+            | BEQ (r1, r2, l) -> 
+              let r1val = lookupReg r1 regs
+              let r2val = lookupReg r2 regs
+              if r1val = r2val then Some l else None
+            | J (l) -> Some l
+            | ALLOC (rd, rs) ->
+              let rsVal = lookupReg rs regs
+              (* create array in heap map object, init first word to store length *)
+              heap <- heap.Add (hp, Array.init (rsVal + 1) (fun x -> if x = 0 then rsVal else 0))
+              (* the adress is array number + 3 zeroes *)
+              regs <- updateReg rd (joinAddr hp 0) regs
+              hp <- hp + 1
+              None
+            | FREE (rs) ->
+              let (blockKey, _) = splitAddr (lookupReg rs regs)
+              if heap.ContainsKey blockKey then
+                  heap <- heap.Remove blockKey
+                  None
+              else failwith (sprintf "Tried freeing non allocated block: %i" blockKey)
+            | CALL (l) -> 
+              (* Make new register bank, only containing argument registers 
+                Each call we call a SimulateFun function which creates a fresh register bank
+                and only returns the return register, maybe? No need for actual stack, use F# call stack*)
+              None
+            | RET -> None
+        
+        (* Iterate trough the code, making jumps and call apropriatly *)
+        let rec simulateBlock (blockCode : PseudoRV list) : int =
+            match blockCode with
+            (* TODO: Handle function calls*)
+            | RET:: rst -> lookupReg Rret regs
+            | CALL(f)::rst -> 
+                let (regArgs, fcode) = lookupFun prog f
+                let valArgs = regArgs |> List.map (fun r -> lookupReg r regs)
+                let retVal = simulateFun (regArgs, fcode) valArgs
+                regs <- updateReg Rret retVal regs
+                simulateBlock rst
+            (* If we get a label, find the code and continue simulating from there*)
+            | inst::rst -> match simulateInst inst with 
+                           | None -> simulateBlock rst
+                           | Some lab ->  getLabCode fcode lab |> simulateBlock
+            | [] -> failwith (sprintf "No return statement found in function") 
+        
+        (* Simulate and return return-register*)
+        simulateBlock fcode
 
-let compileSimulate (e : TypedExp) : int =
-    (* compile expression and place result in "res" register *)
-    let resReg = "res"
-    let vtab: VarTableC = empty()
-    let code = compileExp e vtab resReg
+    (* Call main function, return heap and result *)
+    let main = lookupFun prog "main"
+    let res = simulateFun main []
+    (res,heap)
 
-    (* Reset all global states *)
-    regs <- Map.empty
-    heap <- Map.empty
-    hp <- 0
-    counter <- 0
-
-    (* simulate code *)
-    for ins in code do
-      simulateInst ins
-    
-    (* return result *)
-    lookupReg resReg
+let compileSimulate (prog : Prog) : (int * Heap) =
+    compileProg prog |> simulate
 
 (* ----------------------------------------------------------------------- *)
 (* Tests *)
+(* Program with one function *)
+let sumFun = FunDec(
+    "sum",
+    Int,
+    [ Param("a",Int); Param("b",Int) ],
+    Plus( Var("a"), Var("b") ) 
+)
+let eSum : TypedExp =
+    Apply("sum", [ Constant(IntVal 10)
+                   Constant(IntVal 32) ]) 
+let mainFun = FunDec(
+    "main", Int, [], eSum
+)
+
+let progSum : Prog = [ sumFun; mainFun ]
+let (res, _) = compileSimulate progSum
+printfn "Sum result: %i" res
+
+(* If test *)
+let eIfTest : TypedExp =
+    If(Constant(IntVal 0),
+       Constant(IntVal 123),
+       Constant(IntVal 999)
+    )
+let mainFunIf = FunDec(
+    "main", Int, [], eIfTest
+)
+
+let progIf : Prog = [ sumFun; mainFunIf ]
+let (resIf, _) = compileSimulate progIf
+printfn "If result: %i" resIf
+
+(* Program with 3 functions *)
+let doubleFun = 
+    FunDec("double", 
+           Int, 
+           [ Param("x", Int) ], 
+           Plus(Var("x"), Var("x")))
+let tripleFun =
+    FunDec("triple",
+           Int,
+           [ Param("x", Int) ],
+           Plus(Var("x"), Plus(Var("x"), Var("x"))))
+let mainFun2 =
+    FunDec("main",
+           Int,
+           [],
+           Apply("sum", [
+               Apply("triple", [ Constant(IntVal 4) ]);
+               Apply("double", [ Constant(IntVal 2) ])
+           ]))
+
+let multiProg : Prog = [ sumFun; doubleFun; tripleFun; mainFun2 ]
+let (res2, _) = compileSimulate multiProg
+printfn "Tripple result: %i" res2
+
+(* Recursive function *)
+let sumToFun = FunDec(
+    "sumTo",
+    Int,
+    [ Param("n", Int) ],
+    If(
+        Var("n"),
+        Plus(
+            Var("n"),
+            Apply("sumTo", [ Plus(Var("n"), Constant(IntVal -1)) ])
+        ),
+        Constant(IntVal 0) 
+    )
+)
+
+let mainSumTo = FunDec(
+    "main", Int, [],
+    Apply("sumTo", [ Constant(IntVal 5) ]) // 5 + 4 + 3 + 2 + 1 = 15
+)
+
+let progSumTo : Prog = [ sumToFun; mainSumTo ]
+let (resSumTo, _) = compileSimulate progSumTo
+printfn "SumTo(5) result: %i" resSumTo
+
+(*
 let compareInterpCompArray (lst, t) c = 
     let interpArr = List.toArray lst
     let interpLen = match interpArr[0] with 
@@ -398,3 +569,4 @@ let eAdd = Apply("add", [Constant(IntVal 10); Constant(IntVal 32)])
 let ftab = bind "add" addFun (empty())
 let res = evalExp eAdd (empty()) ftab
 printfn "Interpreter result: %A" res
+*)
