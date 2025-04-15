@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "L4l/zMXUQlVPshDG75Skb0tphdkVShEERl63Py9HqqUvGs3NWGXNjYqRdrl4GZ2/m8CEen1opkgdmoQeIqg6mg==",
+  "success": true,
+  "projectFilePath": "/Users/nikolajkrarup/Documents/Noter/Bachelor/Kode/Fasto-memory/miniFasto/MiniFasto.fsproj",
+  "expectedPackageFiles": [
+    "/Users/nikolajkrarup/.nuget/packages/fsharp.core/8.0.100/fsharp.core.8.0.100.nupkg.sha512"
+  ],
+  "logs": []
+}

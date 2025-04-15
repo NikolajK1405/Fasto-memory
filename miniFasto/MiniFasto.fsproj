@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="miniFasto.fs"/>
+    <Compile Include="ANorm.fs"/>
+    <Compile Include="anfpp.fs"/>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+</Project>

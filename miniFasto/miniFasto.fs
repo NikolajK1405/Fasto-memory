@@ -1,3 +1,4 @@
+module MiniFasto
 (* Mini Fasto for testing and experimental purposes
    minimal error handling as this will be used carefully *)
 
@@ -40,6 +41,7 @@ type addr = string
 
 let R0 : reg = "x_0" (* Always zero reg*)
 let Rret : reg = "xRet" (* Return reg *)
+let labRet : addr = "ret"
 
 (* Pseudo Risc-v instructions*)
 type PseudoRV =
@@ -70,6 +72,7 @@ let newName name =
 
 let newReg name = newName ("x" + name)
 let newLab name = newName ("l." + name)
+let newVar name = newName name
 
 let getArgReg (i : int) (fname : string) = fname + "_arg_" + string i
 let getFname fname : addr = "f."+ fname
@@ -164,6 +167,18 @@ and callFun (fn : FunDec) (args : Value list) (vtab : VarTableI) (ftab : FunTabl
     let res = evalExp e nvtab ftab
     if (valueType res) = t then res
     else failwith (sprintf "Result of function %s: %A, does not match expected output: %A" fid (valueType res) t)
+
+let evalProg (prog : Prog) =
+    let ftab =
+      prog |> List.fold (fun ftab fn -> 
+                        let (FunDec(fid, _, _, _)) = fn
+                        bind fid fn ftab) (empty())
+    let (FunDec(_, _, _, e)) = 
+      match lookup "main" ftab with
+      | None -> failwith "No main function found"
+      | Some f -> f
+    evalExp e (empty()) ftab
+
 (* ----------------------------------------------------------------------- *)
 (* Code generator *)
 
@@ -278,7 +293,7 @@ let compileFun (fn : FunDec) : (string * (reg list * PseudoRV list)) =
          (0, empty(), [])
     (* Compile expression using argument registers and place in return register *)
     let fCode = compileExp exp vtab Rret
-    (fname, (argRegs, [LABEL funLab] @ fCode @ [RET]))
+    fname, (argRegs, [LABEL funLab] @ fCode @ [RET])
 
 (* Each function returns an element of a map, a function name and argument registers with the function code *)
 let compileProg (prog : Prog) : RVProg =
@@ -399,28 +414,26 @@ let simulate (prog : RVProg) : (int * Heap) =
                   heap <- heap.Remove blockKey
                   None
               else failwith (sprintf "Tried freeing non allocated block: %i" blockKey)
-            | CALL (l) -> 
+            | CALL (f) -> 
               (* Make new register bank, only containing argument registers 
                 Each call we call a SimulateFun function which creates a fresh register bank
                 and only returns the return register, maybe? No need for actual stack, use F# call stack*)
+              let (regArgs, fcode) = lookupFun prog f
+              let valArgs = regArgs |> List.map (fun r -> lookupReg r regs)
+              let retVal = simulateFun (regArgs, fcode) valArgs
+              regs <- updateReg Rret retVal regs
               None
-            | RET -> None
+            | RET -> Some labRet
         
         (* Iterate trough the code, making jumps and call apropriatly *)
         let rec simulateBlock (blockCode : PseudoRV list) : int =
             match blockCode with
             (* TODO: Handle function calls*)
-            | RET:: rst -> lookupReg Rret regs
-            | CALL(f)::rst -> 
-                let (regArgs, fcode) = lookupFun prog f
-                let valArgs = regArgs |> List.map (fun r -> lookupReg r regs)
-                let retVal = simulateFun (regArgs, fcode) valArgs
-                regs <- updateReg Rret retVal regs
-                simulateBlock rst
             (* If we get a label, find the code and continue simulating from there*)
             | inst::rst -> match simulateInst inst with 
                            | None -> simulateBlock rst
-                           | Some lab ->  getLabCode fcode lab |> simulateBlock
+                           | Some lab when lab = labRet -> lookupReg Rret regs (* Return *)
+                           | Some lab ->  getLabCode fcode lab |> simulateBlock (* Jump *)
             | [] -> failwith (sprintf "No return statement found in function") 
         
         (* Simulate and return return-register*)
@@ -436,85 +449,16 @@ let compileSimulate (prog : Prog) : (int * Heap) =
 
 (* ----------------------------------------------------------------------- *)
 (* Tests *)
-(* Program with one function *)
-let sumFun = FunDec(
-    "sum",
-    Int,
-    [ Param("a",Int); Param("b",Int) ],
-    Plus( Var("a"), Var("b") ) 
-)
-let eSum : TypedExp =
-    Apply("sum", [ Constant(IntVal 10)
-                   Constant(IntVal 32) ]) 
-let mainFun = FunDec(
-    "main", Int, [], eSum
-)
+(* Run interpretor and compiler, compare results*)
+let runTest (prog : Prog) (pname : string) =
+    let (resC, _) = compileSimulate prog
+    let resI = match evalProg prog with
+               | IntVal v -> v
+               | ArrayVal (_,_) -> 0 (* TODO, implement array testing*)
+    if resC = resI then
+         printfn "Sucess! Test: %s, result: %i" pname resC
+    else printfn "Fail... Test: %s, expected %i, got %i" pname resI resC
 
-let progSum : Prog = [ sumFun; mainFun ]
-let (res, _) = compileSimulate progSum
-printfn "Sum result: %i" res
-
-(* If test *)
-let eIfTest : TypedExp =
-    If(Constant(IntVal 0),
-       Constant(IntVal 123),
-       Constant(IntVal 999)
-    )
-let mainFunIf = FunDec(
-    "main", Int, [], eIfTest
-)
-
-let progIf : Prog = [ sumFun; mainFunIf ]
-let (resIf, _) = compileSimulate progIf
-printfn "If result: %i" resIf
-
-(* Program with 3 functions *)
-let doubleFun = 
-    FunDec("double", 
-           Int, 
-           [ Param("x", Int) ], 
-           Plus(Var("x"), Var("x")))
-let tripleFun =
-    FunDec("triple",
-           Int,
-           [ Param("x", Int) ],
-           Plus(Var("x"), Plus(Var("x"), Var("x"))))
-let mainFun2 =
-    FunDec("main",
-           Int,
-           [],
-           Apply("sum", [
-               Apply("triple", [ Constant(IntVal 4) ]);
-               Apply("double", [ Constant(IntVal 2) ])
-           ]))
-
-let multiProg : Prog = [ sumFun; doubleFun; tripleFun; mainFun2 ]
-let (res2, _) = compileSimulate multiProg
-printfn "Tripple result: %i" res2
-
-(* Recursive function *)
-let sumToFun = FunDec(
-    "sumTo",
-    Int,
-    [ Param("n", Int) ],
-    If(
-        Var("n"),
-        Plus(
-            Var("n"),
-            Apply("sumTo", [ Plus(Var("n"), Constant(IntVal -1)) ])
-        ),
-        Constant(IntVal 0) 
-    )
-)
-
-let mainSumTo = FunDec(
-    "main", Int, [],
-    Apply("sumTo", [ Constant(IntVal 5) ]) // 5 + 4 + 3 + 2 + 1 = 15
-)
-
-let progSumTo : Prog = [ sumToFun; mainSumTo ]
-let (resSumTo, _) = compileSimulate progSumTo
-printfn "SumTo(5) result: %i" resSumTo
 
 (*
 let compareInterpCompArray (lst, t) c = 
