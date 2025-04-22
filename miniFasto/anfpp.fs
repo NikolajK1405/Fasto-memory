@@ -9,8 +9,6 @@ let rec ppAVal (v : AVal) : string =
     match v with
     | N n -> string n
     | V x -> x
-    | Arr (vs, _) -> (vs |>List.fold (fun acc v -> acc + ", " + (ppAVal v)) "{") + "}"
-
 // Helper: join strings with separator
 let joinWith (sep : string) (xs : string list) =
     String.Join(sep, xs)
@@ -52,14 +50,18 @@ and ppANorm (a : ANorm) : string =
     | ValueA(v) ->
         ppAVal v
 
-    | LetA(x, c, body) ->
+    | LetInt(x, c, body) ->
+        let rhs = ppAComp c
+        let bodyStr = ppANorm body
+        sprintf "letI %s = %s in\n%s" x rhs bodyStr
+    | LetArr(x, c, body) ->
         // e.g. let x = c in body
         // We'll do:
         // let x = <ppC>
         // in <ppBody>
         let rhs = ppAComp c
         let bodyStr = ppANorm body
-        sprintf "let %s = %s in\n%s" x rhs bodyStr
+        sprintf "letA %s = %s in\n%s" x rhs bodyStr
 
     | DropA(x, body) ->
         // e.g. drop x in body
