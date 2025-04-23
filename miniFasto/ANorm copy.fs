@@ -40,28 +40,28 @@ let getRetTab (prog:Prog) : RetTable =
 (* Helper function to get type of an expression, 
    minimal since we can use the actual type checker of fasto when moving the implementation *)
 
-let rec getTypeExp (e : TypedExp) (rtab : RetTable) : Type =
+let rec getTypeExp (e : TypedExp) (vttab : VarTypeTable) (rtab : RetTable) : Type =
     match e with
     | Constant v -> valueType v
     | Var v -> 
-      match lookup v vtytab with
+      match lookup v vttab with
       | Some tp -> tp
       | None -> failwith (sprintf "Unkown variable in variable type table: %s" v)
     | ArrayLit (_, tp) -> tp
     | Plus (_,_) ->  Int
     | Let (x,e1,e2) ->
-      vtytab <- bind x (getTypeExp e1 rtab) vtytab
-      getTypeExp e2 rtab
+      let vttab1 = bind x (getTypeExp e1 vttab rtab) vttab
+      getTypeExp e2 vttab1 rtab
     | Index (_,_,tp) -> tp
     | Length (_,_) -> Int
     (* We assume bot branches of if return the same type*)
-    | If (_,e1,_) -> getTypeExp e1 rtab
+    | If (_,e1,_) -> getTypeExp e1 vttab rtab
     | Apply (f,_) -> match lookup f rtab with
                      | Some tp -> tp
                      | None -> failwith (sprintf "Unkown function in return table: %s" f)
 
 (* K is continuation function *)
-let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> ANorm): ANorm =
+let rec flat (e : TypedExp) (vtab : VarTableA) (vtytab : VarTypeTable) (rtab : RetTable) (k : AVal -> ANorm): ANorm =
     match e with
     | Constant (IntVal n) ->
       k (N n)
@@ -69,7 +69,7 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> AN
     | Constant (ArrayVal (vs, tp)) ->
       (* Turn into arraylit to reuse code *)
       let arraylit = ArrayLit(List.map (fun v -> Constant (v)) vs, tp)
-      flat arraylit vtab rtab k
+      flat arraylit vtab vtytab rtab k
 
     | Var id ->
       match lookup id vtab with
@@ -92,26 +92,26 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> AN
           let comp  = ArrLitA (vals, tp)
           LetArr(tArr, comp, k (V tArr))
 
-      flatl elems vtab rtab letBase
+      flatl elems vtab vtytab1 rtab letBase
 
     | Plus(e1, e2) ->
       (* we use the continuation function to recursivly compile each expression 
          and put it together in a let in the end 
          This is the only place we need to update the variable type table *)
       let t = newVar "t" 
-      vtytab <- bind t Int vtytab 
-      flat e1 vtab rtab (fun l ->
-          flat e2 vtab rtab (fun r ->
+      let vtytab1 = bind t Int vtytab 
+      flat e1 vtab vtytab1 rtab (fun l ->
+          flat e2 vtab vtytab1 rtab (fun r ->
               LetInt (t, AddA (l, r), k (V t))))
 
     | Let(id, e1, e2) ->
       (* call recursivly on e2 with the value from e1, no actual
          LetA types to ensure copy and constant propagation *)
-      flat e1 vtab rtab (fun v1 ->
+      flat e1 vtab vtytab rtab (fun v1 ->
           let vtab1 = bind id v1 vtab
-          let idtp = getTypeExp e1 rtab
-          vtytab <- bind id idtp vtytab
-          flat e2 vtab1 rtab (fun v2 -> k v2))
+          let idtp = getTypeExp e1 vtytab rtab
+          let vtytab1 = bind id idtp vtytab
+          flat e2 vtab1 vtytab1 rtab (fun v2 -> k v2))
 
     | Index(id, e, tp) -> 
       let arr = match lookup id vtab with
@@ -119,8 +119,8 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> AN
                 | None -> failwith (sprintf "Undefined array: %s" id)
 
       let t = newVar "i"
-      vtytab <- bind t tp vtytab 
-      flat e vtab rtab (fun i ->
+      let vtytab1 = bind t tp vtytab 
+      flat e vtab vtytab1 rtab (fun i ->
           let Let = match tp with
                     | Int -> LetInt (t, IndexA(arr, i, tp), k (V t))
                     | Array _ -> LetArr (t, IndexA(arr, i, tp), k (V t))
@@ -128,8 +128,8 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> AN
 
     | Length(e, tp) ->
       let t = newVar "arr"
-      vtytab <- bind t Int vtytab 
-      flat e vtab rtab (fun arr ->
+      let vtytab1 = bind t Int vtytab 
+      flat e vtab vtytab1 rtab (fun arr ->
           LetInt (t, LenA (arr, tp), k (V t)))
 
     | Apply (f, es) -> 
@@ -140,7 +140,7 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> AN
                | None -> failwith (sprintf "Unkown function %s" f)
       
       let t = newVar "fRes"
-      vtytab <- bind t tp vtytab 
+      let mutable vtytab1 = bind t tp vtytab 
 
       let letBase (vs : AVal list) =
         (* Generate a new variable name for each function argument *)
@@ -158,28 +158,28 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> AN
         (applBase, argnames, vs) 
         |||> List.fold2 (fun a arg v ->
                           match v with
-                          | N n  -> vtytab <- bind arg Int vtytab
+                          | N n  -> vtytab1 <- bind arg Int vtytab1
                                     LetInt (arg, ArgA (N n), a)
-                          | V vn -> match lookup vn vtytab with
+                          | V vn -> match lookup vn vtytab1 with
                                     | None -> failwith (sprintf "Unkown variable in variable type table: %s" vn)
                                     | Some ty -> match ty with
-                                                  | Int -> vtytab <- bind arg Int vtytab
+                                                  | Int -> vtytab1 <- bind arg Int vtytab1
                                                            LetInt (arg, ArgA (V vn), a)
-                                                  | Array _ -> vtytab <- bind arg (Array Int) vtytab
+                                                  | Array _ -> vtytab1 <- bind arg (Array Int) vtytab1
                                                                LetArr (arg, ArgA (V vn), a)
                                                   ) 
       
-      flatl es vtab rtab letBase
+      flatl es vtab vtytab1 rtab letBase
 
     | If (e1, e2, e3) -> 
     (* We assume both branches of the if return the same type, so only check the type of e2 *)
-      let tp = getTypeExp e2 rtab
+      let tp = getTypeExp e2 vtytab rtab
       let t = newVar "if"
-      vtytab <- bind t tp vtytab
+      let vtytab1 = bind t tp vtytab
 
-      flat e1 vtab rtab (fun v ->
-        let a2 = flat e2 vtab rtab k
-        let a3 = flat e3 vtab rtab k
+      flat e1 vtab vtytab1 rtab (fun v ->
+        let a2 = flat e2 vtab vtytab rtab k
+        let a3 = flat e3 vtab vtytab rtab k
         let ifComp = IfA (v, a2, a3)
         match tp with 
         | Int -> LetInt (t, ifComp, k (V t))
@@ -187,16 +187,16 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (rtab : RetTable) (k : AVal -> AN
         )
 
 (* accumulator function to flatten a list of expression *)
-and flatl (es : TypedExp list) (vtab : VarTableA) (rtab : RetTable) (acc : AVal list -> ANorm): ANorm =
+and flatl (es : TypedExp list) (vtab : VarTableA) (vtytab : VarTypeTable) (rtab : RetTable) (acc : AVal list -> ANorm): ANorm =
     match es with 
     | [] -> acc []
     | e::rst ->
-      flat e vtab rtab (fun v ->
-          flatl rst vtab rtab (fun vs ->
+      flat e vtab vtytab rtab (fun v ->
+          flatl rst vtab vtytab rtab (fun vs ->
               acc (v::vs)))
 
 let anf (e : TypedExp) =
-    flat e (empty()) (empty()) (fun v -> ValueA v)
+    flat e (empty()) (empty()) (empty()) (fun v -> ValueA v)
 
 (* Takes an AVal, returns a string option, Some for var, None for int *)
 let getVar (v : AVal) : string option =
@@ -256,8 +256,7 @@ let anfFun (fn : FunDec) (rtab : RetTable): string * ANorm =
       args |> List.fold (fun (i, vtab, vtytab) (Param(arg,t)) ->
           (i+1, bind arg (V arg) vtab, bind arg t vtytab))
           (0, empty(), empty())
-    vtytab <- anfVtytab
-    let anf = flat exp anfVtab rtab (fun v -> ValueA v)
+    let anf = flat exp anfVtab anfVtytab rtab (fun v -> ValueA v)
 
     fname, analyse anf Set.empty |> fst
 
@@ -405,7 +404,7 @@ let genFun (fn : FunDec) (rtab : RetTable): (string * (reg list * PseudoRV list)
           (i+1, bind arg (V arg) vtab, bind arg t vtytab))
           (0, empty(), empty())
 
-    let aN = flat exp anfVtab rtab (fun v -> ValueA v)
+    let aN = flat exp anfVtab anfVtytab rtab (fun v -> ValueA v)
     //printfn "%A" aN
 
     (* Bind each formal argument to the symbolic argument registers 

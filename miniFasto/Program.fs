@@ -123,11 +123,13 @@ let main argv =
     runTestA progIf "If"
     runTestA multiProg "3 funs"
     runTestA progSumDown "Recursive"
+    (*
     printfn "e1:\n%s" (e1 |> anf |> prettyPrint)
     printfn "e2:\n%s" (e2 |> anf |> prettyPrint)
     printfn "e3:\n%s" (e3 |> anf |> prettyPrint)
     printfn "e4:\n%s" (e4 |> anf |> prettyPrint)
     printfn "e5:\n%s" (e5 |> anf |> prettyPrint)
     printfn "e5 analysed:\n%s" (e5 |> anf |> (fun x -> analyse x Set.empty)|> fst |> prettyPrint)
-    printfn "e6:\n%s" (e6 |> anf |> prettyPrint)
+    printfn "e6:\n%s" (e6 |> anf |> prettyPrint)*)
+    printfn "p5:\n%s" (multiProg |> anfProg |> prettyPrintProg)
     0

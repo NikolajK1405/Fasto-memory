@@ -40,6 +40,7 @@ let rec ppAComp (c : AComp) : string =
                 (ppAVal cond)
                 (ppANorm aThen)
                 (ppANorm aElse)
+    | ArgA (v) -> sprintf "arg(%s)" (ppAVal v)
 
 // Recursively pretty-print ANorm
 // We'll produce lines that look like:
@@ -76,3 +77,6 @@ and ppANorm (a : ANorm) : string =
 // We'll just call "ppANorm a" and maybe trim
 let prettyPrint (a : ANorm) : string =
     ppANorm a
+
+let prettyPrintProg (prog : (string * ANorm) list) : string =
+    prog |> List.fold (fun s (fn, a) -> fn + ":\n" + (ppANorm a) + "\n" + s) ""
