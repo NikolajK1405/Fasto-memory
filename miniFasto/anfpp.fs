@@ -1,8 +1,12 @@
 module ANFPretty
 open ANorm
 open System
-(* pretty printing A-normal form, Made by chatgpt, just for testing.. *)
+(* pretty printing A-normal form, mostly made by chatgpt, just for testing.. *)
 
+let ppType (tp : MiniFasto.Type) : string =
+    match tp with 
+    | MiniFasto.Int -> "int"
+    | MiniFasto.Array _ -> "arr"
 
 // Helper: Pretty-print an AVal
 let rec ppAVal (v : AVal) : string =
@@ -30,7 +34,7 @@ let rec ppAComp (c : AComp) : string =
     | IndexA(arr, idx, tp) ->
         sprintf "%s[%s]" (ppAVal arr) (ppAVal idx)
     
-    | LenA (arr,_) -> 
+    | LenA (arr) -> 
         sprintf "len(%s)" (ppAVal arr)
 
     | IfA(cond, aThen, aElse) ->
@@ -40,7 +44,6 @@ let rec ppAComp (c : AComp) : string =
                 (ppAVal cond)
                 (ppANorm aThen)
                 (ppANorm aElse)
-    | ArgA (v) -> sprintf "arg(%s)" (ppAVal v)
 
 // Recursively pretty-print ANorm
 // We'll produce lines that look like:
@@ -51,26 +54,22 @@ and ppANorm (a : ANorm) : string =
     | ValueA(v) ->
         ppAVal v
 
-    | LetInt(x, c, body) ->
+    | LetA(x, tp, c, body) ->
         let rhs = ppAComp c
         let bodyStr = ppANorm body
-        sprintf "letI %s = %s in\n%s" x rhs bodyStr
-    | LetArr(x, c, body) ->
-        // e.g. let x = c in body
-        // We'll do:
-        // let x = <ppC>
-        // in <ppBody>
-        let rhs = ppAComp c
+        match tp with
+        | MiniFasto.Int -> sprintf "letI %s = %s in\n%s" x rhs bodyStr
+        | MiniFasto.Array _ -> sprintf "letA %s = %s in\n%s" x rhs bodyStr
+    | IncA(x, body) ->
         let bodyStr = ppANorm body
-        sprintf "letA %s = %s in\n%s" x rhs bodyStr
-
-    | DropA(x, body) ->
+        sprintf "inc %s in\n%s" x bodyStr
+    | DecA(x, body) ->
         // e.g. drop x in body
         // We'll do:
         // drop x
         // <ppBody>
         let bodyStr = ppANorm body
-        sprintf "drop %s in\n%s" x bodyStr
+        sprintf "dec %s in\n%s" x bodyStr
 
 // For convenience, define a top-level function that
 // produces a nice multi-line string
@@ -78,5 +77,11 @@ and ppANorm (a : ANorm) : string =
 let prettyPrint (a : ANorm) : string =
     ppANorm a
 
-let prettyPrintProg (prog : (string * ANorm) list) : string =
-    prog |> List.fold (fun s (fn, a) -> fn + ":\n" + (ppANorm a) + "\n" + s) ""
+let ppAFunDec (f : AFunDec) : string =
+    let (AFunDec (fname, tp, args, A)) = f
+    let argString = args |> List.fold (fun s (MiniFasto.Param (arg,tp)) -> s + arg + ": " + ppType tp + ", " ) "" 
+    let argString' = argString.[.. argString.Length - 3]
+    sprintf "%s(%s):\n%s" fname argString' (prettyPrint A)
+
+let prettyPrintProg (prog : AProg) : string =
+    prog |> List.fold (fun s fn -> s + ppAFunDec fn + "\n\n") ""

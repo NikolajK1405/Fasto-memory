@@ -24,7 +24,7 @@ type Exp<'T> =
   | Let       of string * Exp<'T> * Exp<'T> // Let "a" = exp in exp 
   //Tilføj hvad er typen af den bundende variabel, er det en pointer? både i let og funktions argument
   | Index     of string * Exp<'T> * 'T
-  | Length    of Exp<'T> * 'T
+  | Length    of Exp<'T>
   | If        of Exp<'T> * Exp<'T> * Exp<'T> // If exp != 0 Then exp Else exp
   | Apply     of string * Exp<'T> list 
 
@@ -144,7 +144,7 @@ let rec evalExp (e : TypedExp) (vtab : VarTableI) (ftab : FunTable): Value =
                 else failwith "Array index out of bounds"
           | (Some m, IntVal _) -> failwith "Indexing into non array"
           | (_, _) -> failwith "Indexing expression type error"
-  | Length(e1, _) ->
+  | Length(e1) ->
         let arr = evalExp e1 vtab ftab
         match arr with
             | ArrayVal(lst, _) -> lst[0]
@@ -255,7 +255,7 @@ let rec compileExp  (e      : TypedExp)
                   ; LW  (place, arrReg, 0) ]
     
     indCode @ initCode @ loadCode
-  | Length(e, _) ->
+  | Length(e) ->
     (* load word from arr pointer *)
     let arrAddr = newReg "len_arr"
     let code1    = compileExp e vtable arrAddr
