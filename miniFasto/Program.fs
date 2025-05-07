@@ -239,6 +239,55 @@ let mainIfArrays =
 /// whole program
 let progIfArrays : Prog = [ mainIfArrays ]
 
+let ifArraySelect : TypedExp =
+    Let("g", Constant(IntVal 1),
+    Let("y", ArrayLit([ Constant(IntVal 1)
+                        Constant(IntVal 2)
+                        Constant(IntVal 3) ], Int),
+    Let("z", ArrayLit([ Constant(IntVal 4)
+                        Constant(IntVal 5)
+                        Constant(IntVal 6) ], Int),
+    Let("x", If(Var "g", Var "y", Var "z"),
+    Let("v", Index("x", Constant(IntVal 2), Int),
+    //Let("u", Index("z", Constant(IntVal 0), Int),
+        Var "v")))))//)
+
+let progIfArraySelect : Prog = buildProgExpr ifArraySelect
+
+open MiniFasto                          // just to bring the names in scope
+
+// array literals
+let yArr : TypedExp =
+    ArrayLit ( [ Constant (IntVal 1)
+                 Constant (IntVal 2)
+                 Constant (IntVal 3) ],
+               Int )                    // element type
+
+let zArr : TypedExp =
+    ArrayLit ( [ Constant (IntVal 4)
+                 Constant (IntVal 5)
+                 Constant (IntVal 6) ],
+               Int )
+
+// condition for the if - expression
+let cond : TypedExp = Constant (IntVal 1)   // “true”
+
+// build the nested lets
+let ifelseCopy : TypedExp =
+    Let ("y", yArr,
+     Let ("z", zArr,
+      Let ("x", If (cond, Var "y", Var "z"),
+       Let ("v", Index ("x", Constant (IntVal 1), Int),  // v = x[1]
+        Let("u", Index ("y", Constant (IntVal 1), Int),
+        Var "v")))))
+
+// wrap it in a one-function programme
+let ifelseCopyProg : Prog =
+    [ FunDec ("main",              // function name
+              Int,                 // return type
+              [],                  // no parameters
+              ifelseCopy) ]          // function body
+
 [<EntryPoint>]
 let main argv =
     runTestA p1 "p1"
@@ -266,5 +315,7 @@ let main argv =
     printfn "Array is still alive after given as a args:\n%s" (progAfterUse |> anfProg |> prettyPrintProg)
     printfn "One array dies after function, the other is still live\n%s" (progMix      |> anfProg |> prettyPrintProg)
     printfn "If program: :\n%s" (progIfArrays |> anfProg |> prettyPrintProg)
-    runTest progIfArrays "lol"
+    runTestA progIfArrays "lol"
+    printfn "If program: :\n%s" (progIfArraySelect |> anfProg |> prettyPrintProg)
+    printfn "If copy program: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg)
     0

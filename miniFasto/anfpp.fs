@@ -40,7 +40,7 @@ let rec ppAComp (c : AComp) : string =
     | IfA(cond, aThen, aElse) ->
         // For If, we can inline or show multi-line
         // We'll inline for simplicity
-        sprintf "if %s then (%s) else (%s)" 
+        sprintf "if %s then (\n\n%s)\n\n else (\n%s)\n\n" 
                 (ppAVal cond)
                 (ppANorm aThen)
                 (ppANorm aElse)

@@ -24,20 +24,6 @@ type AProg = AFunDec list
 
 (* Set of live variables, used to analyze when we can add drops *)
 type LiveSet = Set<string>
-(* Available variables now and variables we need to keep alive for later,
-   when entering this node. *)
-type LiveSets = LiveSet * LiveSet
-
-(* Temporary version of ANF, to be used when inserting dec and inc*)
-type ANormLive = 
-  | ValueAL of AVal * LiveSets
-  | LetAL of string * Type * ACompLive * ANormLive * LiveSets
-
-(* We also need livesets in if-else computations*)
-and ACompLive = 
-  | IfALive of AVal * ANormLive * ANormLive
-  | CompLive of AComp
-
 (* Takes an AVal, returns a string option, Some for var, None for int *)
 let getVar (v : AVal) : string option =
     match v with 
@@ -63,7 +49,8 @@ let rec getVarsANorm (a : ANorm) : LiveSet =
 (* Function for returning all the variable names of a computation *)
 and getVarsComp (c : AComp) : LiveSet =
     match c with
-    | IfA (g,b1,b2) -> [g]
+    | IfA (g,b1,b2) -> [g]// Maybe no need for all this since they are given along as liveset in analyse.
+      //(Set.union (getVarsANorm b1) (getVarsANorm b2) |> Set.toList |> List.map (fun v -> V v)) @ [g]
     | ApplyA (_,vals) -> vals 
     | AddA (v1,v2) -> [v1;v2]
     | ArrLitA(vals,_) -> vals
@@ -110,7 +97,7 @@ let rec getTypeExp (e : TypedExp) (vtab : VarTableA) (rtab : FTTable) : Type =
     | Constant v -> valueType v
     | Var v -> 
       lookupType v vtab
-    | ArrayLit (_, tp) -> Array tp
+    | ArrayLit (_, tp) -> tp
     | Plus (_,_) ->  Int
     | Let (x,e1,e2) ->
       (* Just input an arbitrary AVal to the vtab, we jsut need types here, 
@@ -122,51 +109,6 @@ let rec getTypeExp (e : TypedExp) (vtab : VarTableA) (rtab : FTTable) : Type =
     (* We assume bot branches of if return the same type*)
     | If (_,e1,_) -> getTypeExp e1 vtab rtab
     | Apply (f,_) -> lookupFRet f rtab
-
-(* Get count of necesarry increments around an anf if its an apply node
-   a : the anf node
-   body : the ANormLive subtree of a *)
-let getIncCount (c : AComp) (body : ANormLive) (anfVtab : SymTab<Type>) : string list * LiveSet =
-(* If we have a function call, we might need to insert some increments.
-    if an arg is used n times, increment n-1 times, plus one more if still live after call *)
-    match c with 
-    | ApplyA (f, vs) ->
-      (* Get function arguments that are arrays *)
-      let arrArgs =
-        vs |> List.choose getVar
-        |> List.filter (fun x -> 
-        match lookup x anfVtab with
-        | Some tp -> tp <> Int
-        | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" x))
-      let arrArgsSet = Set.ofList arrArgs
-      (* Get liveOut of the function call (Variables alive after this current let)
-          Use liveOut to find what function arguments are live after function call *)
-      let argsLiveAfter = 
-        match body with 
-        | ValueAL (_,(_,liveIn1)) -> liveIn1
-        | LetAL (_, _, _, _, (_, liveIn1)) -> liveIn1
-        |> Set.intersect arrArgsSet
-
-      (* Create a map to keep count of how many increments we need, 
-          start with 0 for each arg that is live *)
-      let argCount =
-        argsLiveAfter |> Set.fold (fun lst v -> (v,0)::lst) []
-        |> Map.ofList
-      
-      (* Now add 1 to the map's count of each variable in the list of arguments *)
-      let argCount1 = 
-        arrArgs |> List.fold (fun map v -> 
-                              match Map.tryFind v map with
-                              | Some n -> Map.add v (n+1) map
-                              | None -> Map.add v 0 map) argCount
-      
-      (* Turn back into a list, where each element is repeated by the number of times they need to be increased *)
-      let argCount2 =
-        argCount1 |> Map.fold (fun lst v n -> lst @ List.replicate n v) []
-      
-      (* Return count, and the set of all the args that die after the call *)
-      argCount2, Set.difference arrArgsSet argsLiveAfter
-    | _ -> [], Set.empty
 
 (* Flattes a function body expression to a-normal form and analyses it to include reference counting. 
    Arguments: 
@@ -258,12 +200,12 @@ let flatAnalyse (exp : TypedExp) (varTab : VarTableA) (ftab : FTTable) =
         | If (e1, e2, e3) -> 
         (* We assume both branches of the if return the same type, so only check the type of e2 *)
           flat e1 vtab (fun v ->
+            let tp = getTypeExp e2 vtab ftab
             (* Evaluate each branch with its own k function, stopping when we get a value *)
             let a2 = flat e2 vtab (fun v -> ValueA v)
             let a3 = flat e3 vtab (fun v -> ValueA v)
             let ifComp = IfA (v, a2, a3)
             let t = newVar "if"
-            let tp = getTypeExp e2 vtab ftab
             anfVtab <- bind t tp anfVtab
             LetA (t, tp, ifComp, k (V t))
             )
@@ -277,116 +219,117 @@ let flatAnalyse (exp : TypedExp) (varTab : VarTableA) (ftab : FTTable) =
               flatl rst vtab  (fun vs ->
                   acc (v::vs)))
 
-    let rec analyse (a : ANorm) (live : LiveSet) (available : LiveSet) : ANorm =
-      (* Go truough the anf program and generate available sets top down, and live sets bottom up,
-         return an intermediate ANF form with populated live sets
-         liveOut   : Variables still needed after this anf subtree
-         available : Variables currently available to be used *)
-        let rec genSets (a : ANorm) (liveOut : LiveSet) (available : LiveSet) : ANormLive * LiveSet = 
+    (* Insert an incr in the end of an if-else branch *)
+    let incrTailVal (branch : ANorm) : ANorm * string =
+      let mutable str = ""
+      let rec incrTail (a : ANorm) : ANorm =
           match a with
-          | ValueA (N i) -> ValueAL (N i, (available, liveOut)), liveOut
-          | ValueA (V x) -> 
-            let liveIn =
-              (* If x is an array, add it to out liveset *)
-              match lookup x anfVtab with
-              | Some tp -> if tp <> Int then liveOut |> Set.add x else liveOut
-              | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" x)
-            let liveSets = (available, liveIn)
-            ValueAL (V x, liveSets), liveIn
-          | LetA (id, tp, c, body) ->
-            (* TOP DOWN - add to available set *)
-            let idIsArr = tp <> Int
-            (* if ID is array, we want to add it to our availableOut set*)
-            let availableOut = if idIsArr then available |> Set.add id else available
+          | ValueA (V v) -> 
+            match lookup v anfVtab with
+            | Some tp -> if tp <> Int then 
+                          str <- v
+                          IncA (v, a) 
+                          else a
+            | None -> failwith (sprintf "Unkown variable in anfvtab: %s" v)
+          | ValueA _ -> a
+          | LetA (x,t,c,b) -> LetA (x,t,c, incrTail b)
+          | IncA (x,b) -> IncA (x, incrTail b)
+          | DecA (x,b) -> DecA (x, incrTail b)
+      let increased = incrTail branch
+      increased, str
 
-            (* BOTTOM UP - add used variables to liveset*)
-            let body1, childLiveIn = genSets body liveOut availableOut
-            (* Get the variables used in the let's computation, if its an if-else, call recursivly on each branch*)
-            let c1, compLive = 
-              match c with
-              | IfA (g, b1, b2) ->
-                let gLive = getVarsComp c
-                (* Use childLiveIn as argument live set, as these variables still need to be alive after the branches *)
-                let b1body, b1live = genSets b1 childLiveIn availableOut
-                let b2body, b2live = genSets b2 childLiveIn availableOut
-                let allLive = Set.union b1live b2live |> Set.union gLive
-                IfALive (g, b1body, b2body), allLive
-              | _ -> CompLive c, getVarsComp c
-
+    (* Analyze A-normal form and insert drops when arrays are no longer used 
+      Bottom up approach, use a liveset to keep track of live variables *)
+    let rec analyse (a : ANorm) (liveOut : LiveSet) : ANorm * LiveSet =
+        match a with
+        | ValueA (N i) -> a, liveOut
+        | ValueA (V x) -> 
+          (* Only add arrays as live variables *)
+          match lookup x anfVtab with
+          | Some tp -> if tp <> Int then a, liveOut |> Set.add x else a, liveOut
+          | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" x)
+        | LetA (id, tp, c, body) -> 
+          (* Get the liveSet from the body of the let, if the variables from the let's computation 
+            dont exist in the body's liveset, we can drop them*)
+          let body1, liveIn = analyse body liveOut
+          (* Get the variables used in computations of the let
+            If the type is an array, we also want to check if the id is used, so we can free it otherwise *)
+          let compLive = 
+            if tp <> Int 
+              then getVarsComp c |> Set.add id
+              else getVarsComp c
             (* Sort out any variables that are not arrays *)
-            let compLive1 = 
-              compLive
-              |> Set.filter (fun x -> 
-                              match lookup x anfVtab with
-                              | Some tp -> tp <> Int
-                              | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" x))
+            |> Set.filter (fun x -> 
+                            match lookup x anfVtab with
+                            | Some tp -> tp <> Int
+                            | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" x))
+          (* The variables who was last used in the computation (Not present in the body) *)
+          let dead = Set.difference compLive liveIn
+          (* Insert a drop for each of these variables *)
+          let decpbody = dead |> Set.fold (fun a v -> DecA (v,a)) body1
 
-            (* The liveIn set for the current node is those needed for the subtree + the ones used in this node*)
-            let liveIn = Set.union childLiveIn compLive1
-            let liveSets = (availableOut, liveIn)
-            LetAL (id, tp, c1, body1, liveSets), liveIn
-          (* Should not be present after flat *)
-          | IncA (_,_) -> failwith (sprintf "Increment already presented while analysing")
-          | DecA (_,_) -> failwith (sprintf "Decrement already presented while analysing")
-      
-      (* Insert dec and inc into a ANormLive tree, convert to ANorm. 
-         decr is the set of variables we already decremented, and should be removed from available,
-         another decr is also returned, so we can keep track of what is decremented in branches *)
-        let rec insertDecInc (aL : ANormLive) (decr : LiveSet) (incrFlag : bool): ANorm * LiveSet =
-          let anf, dead, dec =
-            match aL with
-            | ValueAL (av, (available, liveIn)) -> 
-              (* If any available values are left, other than the returned one, decrement them *)
-              let v,anfv = 
-                match av with
-                | N _ -> Set.empty, ValueA av
-                | V vn -> match lookup vn anfVtab with
-                          | Some tp -> if tp <> Int then 
-                                          (* If value is to be used and assigned to another, 
-                                             we need to increment it if its still live after*)
-                                          if incrFlag then
-                                            Set.empty.Add vn, IncA(vn, ValueA av)
-                                          else Set.empty.Add vn, ValueA av
-                                       else Set.empty, ValueA av
-                          | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" vn)
-              let dead = Set.difference  (v |> Set.difference (Set.difference available decr)) liveIn 
-              anfv, dead, Set.union dead decr
-            | LetAL (id, tp, c, body, (available, liveIn)) ->
-              (* Remove the variables from available that we already decremented *)
-              let availableNow =  Set.difference available decr
-              (* Find all variables that avaialable and not live, these are dead and can be decremented*)
-              let dead = Set.difference availableNow liveIn
-              (* If the computation is if-else or function call, we need furher steps*)
-              let c1, decIf =
-                match c with
-                | IfALive (g,b1,b2) ->
-                  let b1body, decs1 = insertDecInc b1 dead true
-                  let b2body, decs2 = insertDecInc b2 dead true
-                  IfA (g,b1body,b2body), Set.union decs1 decs2
-                | CompLive comp -> comp, Set.empty
-              (* Get the count of necesarry inc statements, only needed for function calls*)
-              let incCount,decApply = getIncCount c1 body anfVtab
-              let decremented = Set.unionMany [dead; decr; decIf; decApply]
-              (* Call recursivly on body *)
-              let body1,decc = insertDecInc body decremented incrFlag
-              (* Final Let, insert inc if needed*)
-              let Let = List.fold (fun a v -> IncA(v,a)) (LetA (id, tp, c1, body1)) incCount
-              Let, dead, decc
-          (* Insert a drop for each of the dead variables *)
-          dead |> Set.fold (fun a v -> DecA (v,a)) anf, dec
+          (* the new let with drops, and the body's live variable + comp's variables *)
+          let Let = LetA (id, tp, c, decpbody) 
+          (* All live variables in this let's comp + the ones in the body *)
+          let liveAfter = Set.union liveIn compLive
 
-        let anfLive, _ = genSets a live available
-        insertDecInc anfLive Set.empty false |> fst
+          (* In anf form, function calls and if-else are the only terms that can copy pointers, 
+              and such is the place we need to insert increment statements*)
+          match c with
+          | ApplyA (_,vals) ->
+            (* List containing each variable that is used as function argument, may include duplicates *)
+            let args = vals |> List.choose getVar 
+            (* Insert an incr statement for each function argument, before the let
+              If same argument is used more times we insert multiple increment, as there will be multiple copies*)
+            let incrLet = args |> List.fold (fun A v -> IncA (v, A)) Let
+            incrLet, liveAfter
+          | IfA (g,a1,a2) ->
+            (* Analyse each branch, and get the used variables*)
+            let b1body, b1Live = analyse a1 liveAfter // x, y
+            let b2body, b2Live = analyse a2 liveAfter // z, x
+
+            (* Variables only live in one branch has to die *)
+            let b1dead = Set.difference b2Live b1Live // z
+            let b2dead = Set.difference b1Live b2Live // y
+
+            let b1dec = b1dead |> Set.fold (fun a v -> DecA (v,a)) b1body
+            let b2dec = b2dead |> Set.fold (fun a v -> DecA (v,a)) b2body
+
+            (* In the case that the branch has an exsisting array variable as the final value,
+                we need to increase the array's ref count since its copied *)
+            let b1inc, var1 = incrTailVal b1dec
+            let b2inc, var2 = incrTailVal b2dec
+
+            (* Only if the variable is still live after the if-else, and if the var is an array *)
+            let b1Body = if Set.contains var1 liveAfter then b1inc else b1dec 
+            let b2Body = if Set.contains var2 liveAfter then b2inc else b2dec 
+
+            let decIf = IfA (g, b1Body, b2Body)
+            let liveBeforeIf = Set.union b1Live b2Live
+            LetA (id, tp, decIf, decpbody), liveBeforeIf
+          | _ ->
+            Let, liveAfter
+        | IncA (_,_) -> a, liveOut
+        | DecA (_,_) -> a, liveOut
+
     
     (* Flatten expression to anf*)
     let anf = flat exp varTab (fun v -> ValueA v)
 
-    (* Convert function arguments to a liveset, as these are available from the start when we analyse our fun body*)
-    let args = varTab |> Map.fold (fun set id (_,t) -> if t <> Int then set |> Set.add id else set) Set.empty
-
     (* Analyse *)
-    analyse anf Set.empty args
+    let anf1, live = analyse anf Set.empty
 
+    (* Check if function arguments of array type are used in the body, otherwise decrement them
+    Necesarry since analyse only decrements variables that are used in computations or assigned in a let *)
+
+    (* Convert the Vartab to a list of arguments, also filter out non-array vars, 
+       as flatAnalyse contract states, Vartab should only contain the function argument variables*)
+    let args = varTab |> Map.fold (fun lst id (_,t) -> if t <> Int then id::lst else lst) []
+    (* Get the set of all the unused variables *)
+    let dead = Set.difference (args |> Set.ofList) live
+    (* Insert a decr for each dead var *)
+    let anf2 = dead |> Set.fold (fun a v -> DecA (v,a)) anf1
+    anf2 
 
 (* Make a FunDec into anf (AFunDec) *)
 let anfFun (fn : FunDec) (ftab : FTTable): AFunDec =
