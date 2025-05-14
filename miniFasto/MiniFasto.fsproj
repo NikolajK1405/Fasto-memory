@@ -9,6 +9,7 @@
     <Compile Include="miniFasto.fs"/>
     <Compile Include="ANorm.fs"/>
     <Compile Include="anfpp.fs"/>
+    <Compile Include="RandomGen.fs"/>
     <Compile Include="Program.fs" />
   </ItemGroup>
 

@@ -89,9 +89,9 @@ let buildProg (funs : (string * Param list * TypedExp) list)
     funDecs @ [mainDec]  
 
 (* Build program from just an expression *)
-let buildProgExpr (mainBody : TypedExp) : Prog =
+let buildProgExpr (mainBody : TypedExp) (retType : Type): Prog =
     // simply wrap the expression in a main function
-    [ FunDec("main", Int, [], mainBody) ]
+    [ FunDec("main", retType, [], mainBody) ]
 
 
 let anfTest = Plus(Constant (IntVal 2), Constant (IntVal 1))
@@ -106,11 +106,11 @@ let e4 = Length(e2)
 let e5 = Let("a", e2, Let("b", e2, Plus(Index("a", Constant(IntVal 2), Int), Index("b", Constant(IntVal 4), Int) )))
 let e6 = Let("a", Constant(IntVal 1), Plus (Var "a", Constant(IntVal 2)))
 
-let p1 = buildProgExpr e1
-let p2 = buildProgExpr e2
-let p3 = buildProgExpr e3
-let p4 = buildProgExpr e4
-let p5 = buildProgExpr e5
+let p1 = buildProgExpr e1 Int
+let p2 = buildProgExpr e2 (Array Int)
+let p3 = buildProgExpr e3 Int
+let p4 = buildProgExpr e4 Int
+let p5 = buildProgExpr e5 Int
 
 let unusedArgFun =
     FunDec("unused",
@@ -252,9 +252,7 @@ let ifArraySelect : TypedExp =
     //Let("u", Index("z", Constant(IntVal 0), Int),
         Var "v")))))//)
 
-let progIfArraySelect : Prog = buildProgExpr ifArraySelect
-
-open MiniFasto                          // just to bring the names in scope
+let progIfArraySelect : Prog = buildProgExpr ifArraySelect Int
 
 // array literals
 let yArr : TypedExp =
@@ -276,10 +274,12 @@ let cond : TypedExp = Constant (IntVal 1)   // “true”
 let ifelseCopy : TypedExp =
     Let ("y", yArr,
      Let ("z", zArr,
-      Let ("x", If (cond, Var "y", Var "z"),
+     Let ("g", Plus (Constant (IntVal 1),Constant (IntVal 1)),
+      Let ("x", If (Var "g", Var "y", Var "z"),
        Let ("v", Index ("x", Constant (IntVal 1), Int),  // v = x[1]
         Let("u", Index ("y", Constant (IntVal 1), Int),
-        Var "v")))))
+        Let("p", Plus(Var "u",Var "v"),
+        Var "p")))))))
 
 // wrap it in a one-function programme
 let ifelseCopyProg : Prog =
@@ -287,6 +287,87 @@ let ifelseCopyProg : Prog =
               Int,                 // return type
               [],                  // no parameters
               ifelseCopy) ]          // function body
+open RandomGen
+
+let fuzz count size =
+  for i = 1 to count do
+    let prog = genProg size
+    try
+      //printfn "fuzz-%d:\n%s" i (prog |> anfProg |> prettyPrintProg)
+      runTestA prog (sprintf "fuzz-%d" i)
+    with ex ->
+      printfn "‼️ crash in fuzz-%d: %s" i ex.Message
+      printfn "%s" (prog |> anfProg |> prettyPrintProg)
+      raise ex
+
+let progDeadLit : Prog =
+  [ FunDec ("main", Int, [],
+            Let ("tmp", ArrayLit ([Constant(IntVal 1)], Int),
+                 Constant (IntVal 42))) ]
+
+let progReturnArr : Prog =
+  [ FunDec ("main", Array Int, [],
+            ArrayLit ([Constant(IntVal 7); Constant(IntVal 8)], Int)) ]
+
+let helperPassthrough =
+      FunDec ("id", Array Int, [Param("a", Array Int)], Var "a")
+
+let progPassThru : Prog =
+  [ helperPassthrough
+    FunDec ("main", Int, [],
+      Let("arr", ArrayLit([Constant(IntVal 1)], Int),
+        Let("b", Apply("id",[Var "arr"]),
+          Length (Var "b")))) ]
+
+let dupLen =
+      FunDec ("dblLen", Int,
+              [Param("x",Array Int); Param("y",Array Int)],
+              Plus(Length(Var "x"), Length(Var "y")))
+
+let progAlias : Prog =
+  [ dupLen
+    FunDec ("main", Int, [],
+      Let ("a", ArrayLit([Constant(IntVal 2);Constant(IntVal 3)],Int),
+        Apply("dblLen",[Var "a"; Var "a"]))) ]
+
+let progBranchLocal : Prog =
+  [ FunDec ("main", Int, [],
+      Let("g", Constant(IntVal 0),
+        Let("x",
+          If(Var "g",
+             ArrayLit([Constant(IntVal 10)],Int),    // only here
+             Constant(IntVal 0)),
+          Plus(Var "g", Constant(IntVal 1)))) ) ]
+
+let progShadow : Prog =
+  [ FunDec ("main", Int, [],
+      Let("a", ArrayLit([Constant(IntVal 5)],Int),
+        Let("a", ArrayLit([Constant(IntVal 6)],Int),
+          Length (Var "a")))) ]
+
+let recFun =
+      FunDec ("f", Array Int, [Param("n",Int)],
+        If(Var "n",
+           Let("tmp", ArrayLit([Constant(IntVal 0)],Int),
+               Apply("f",[Plus(Var "n",Constant(IntVal -1))])),
+           ArrayLit([Constant(IntVal 1)],Int)))
+
+let progRecArr : Prog =
+  [ recFun
+    FunDec ("main", Int, [],
+      Let("res", Apply("f",[Constant(IntVal 5)]),
+        Length(Var "res"))) ]
+
+let f3 =
+      FunDec ("thrice", Int,
+        [Param("p",Array Int); Param("q",Array Int); Param("r",Array Int)],
+        Plus(Length(Var "p"), Plus(Length(Var "q"), Length(Var "r"))))
+
+let progManyUses : Prog =
+  [ f3
+    FunDec ("main", Int, [],
+      Let("a", ArrayLit([Constant(IntVal 0);Constant(IntVal 0)],Int),
+        Apply("thrice",[Var "a"; Var "a"; Var "a"]))) ]
 
 [<EntryPoint>]
 let main argv =
@@ -299,15 +380,7 @@ let main argv =
     runTestA progIf "If"
     runTestA multiProg "3 funs"
     runTestA progSumDown "Recursive"
-    (*
-    printfn "e1:\n%s" (e1 |> anf |> prettyPrint)
-    printfn "e2:\n%s" (e2 |> anf |> prettyPrint)
-    printfn "e3:\n%s" (e3 |> anf |> prettyPrint)
-    printfn "e4:\n%s" (e4 |> anf |> prettyPrint)
-    printfn "e5:\n%s" (e5 |> anf |> prettyPrint)
-    printfn "e5 analysed:\n%s" (e5 |> anf |> (fun x -> analyse x Set.empty)|> fst |> prettyPrint)
-    printfn "e6:\n%s" (e6 |> anf |> prettyPrint)
-    *)
+    (*printfn "Recursive:\n%s" (progSumDown |> anfProg |> prettyPrintProg)
     printfn "e5:\n%s" (p5 |> anfProg |> prettyPrintProg)
     printfn "p tripple:\n%s" (multiProg |> anfProg |> prettyPrintProg)
     printfn "p unused:\n%s" (unusedProg |> anfProg |> prettyPrintProg)
@@ -315,7 +388,24 @@ let main argv =
     printfn "Array is still alive after given as a args:\n%s" (progAfterUse |> anfProg |> prettyPrintProg)
     printfn "One array dies after function, the other is still live\n%s" (progMix      |> anfProg |> prettyPrintProg)
     printfn "If program: :\n%s" (progIfArrays |> anfProg |> prettyPrintProg)
-    runTestA progIfArrays "lol"
     printfn "If program: :\n%s" (progIfArraySelect |> anfProg |> prettyPrintProg)
-    printfn "If copy program: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg)
+    printfn "If copy program: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg) *)
+    runTestA p5 "1"
+    runTestA multiProg "2"
+    runTestA unusedProg "3"
+    runTestA progDup "4"
+    runTestA progAfterUse "5"
+    runTestA progMix "6"
+    runTestA progIfArrays "7"
+    runTestA progIfArraySelect "8"
+    runTestA ifelseCopyProg "9"
+    fuzz 100 6   // 100 random programs of (rough) size ≤ 6
+    runTestA progDeadLit     "dead-literal"
+    runTestA progReturnArr   "return-arr"
+    runTestA progPassThru    "pass-through"
+    runTestA progAlias       "alias"
+    runTestA progBranchLocal "branch-local"
+    runTestA progShadow      "shadowing"
+    runTestA progRecArr      "rec-array"
+    runTestA progManyUses    "multi-use"
     0

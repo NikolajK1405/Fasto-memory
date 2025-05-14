@@ -60,10 +60,12 @@ type PseudoRV =
   | J   of addr         (* J(addr):         goto(addr) *)
 
   | ALLOC of reg*reg    (* ALLOC(rd,rs):    rd = adress of rs allocated words *)
-  | FREE  of reg        (* FREE(rs):        free allocated memory of rs adress *)
+  | INC   of reg        (* INC(rs):         Increment ref counter at rs address*)
+  | DEC   of reg        (* DEC(rs):         Decrement ref counter at rs address. If 0, Free *)
 
   | CALL  of addr
   | RET
+
 
 let mutable counter = 1
 let newName name =
@@ -315,12 +317,18 @@ let lookupReg (reg: reg) (regs : Registers)  =
 let updateReg (reg: reg) (x : int) (regs : Registers) =
     regs.Add (reg, x)
 
+let rec lookupFunDec (prog : Prog) (fname : string) : FunDec =
+    match prog with
+    | FunDec (f,_,_,_)::_ when f = fname -> prog.Head
+    | _::rst -> lookupFunDec rst fname
+    | [] -> failwith (sprintf "could not find function: %s" fname)
+
 let lookupFun (prog : RVProg) (fname : addr) =
     match prog.TryFind fname with
     | Some fn -> fn
     | None -> failwith (sprintf "Unkown function: %s" fname)
 
-type Heap = Map<int, array<int>> (* each allocated array has an adress (int) and a corresponding array*)
+type Heap = Map<int,(int * array<int>)> (* each allocated array has an adress (int), and a corresponding ref count and array*)
 let offsetSize = 1000 (* Max array size 999 *)
 let splitAddr addr = 
     let block  = addr / offsetSize (* strip of 3 least significant digits to get the Map key for the array *) 
@@ -331,17 +339,17 @@ let joinAddr block offset = (* optional offset *)
     block * offsetSize + offset
 let lookUpHeap (addr : int) (heap : Heap) =
     let (block, offset) = splitAddr addr
-    let array = match heap.TryFind block with
-                | Some arr -> arr
-                | None -> failwith (sprintf "No allocated block: %i" block)
-    (array, offset) (* return array and offset *)
+    let refCount,array = match heap.TryFind block with
+                          | Some (ref,arr) -> ref,arr
+                          | None -> failwith (sprintf "No allocated block: %i" block)
+    (array, offset, refCount) (* return array, offset and ref count*)
 
 let writeHeap (addr : int) (word : int) (heap : Heap) = 
-    let (array, offset) = lookUpHeap addr heap
+    let (array, offset,_) = lookUpHeap addr heap
     array.[offset] <- word
 
 let readHeap (addr : int) (heap : Heap) = 
-    let (array, offset) = lookUpHeap addr heap
+    let (array, offset,_) = lookUpHeap addr heap
     array.[offset]
 
 (* Search trough Risc-V program and return code from label and onward *)
@@ -402,18 +410,27 @@ let simulate (prog : RVProg) : (int * Heap) =
             | J (l) -> Some l
             | ALLOC (rd, rs) ->
               let rsVal = lookupReg rs regs
-              (* create array in heap map object, init first word to store length *)
-              heap <- heap.Add (hp, Array.init (rsVal + 1) (fun x -> if x = 0 then rsVal else 0))
+              (* create array in heap map object, init with refcount 1 and use first word to store length *)
+              heap <- heap.Add (hp, (1,Array.init (rsVal + 1) (fun x -> if x = 0 then rsVal else 0)))
               (* the adress is array number + 3 zeroes *)
               regs <- updateReg rd (joinAddr hp 0) regs
               hp <- hp + 1
               None
-            | FREE (rs) ->
+            | DEC (rs) ->
+              let (arr,_,ref) = lookUpHeap (lookupReg rs regs) heap
               let (blockKey, _) = splitAddr (lookupReg rs regs)
-              if heap.ContainsKey blockKey then
-                  heap <- heap.Remove blockKey
-                  None
-              else failwith (sprintf "Tried freeing non allocated block: %i" blockKey)
+              (* If ref count is 1, free the array *)
+              if ref = 1 then 
+                heap <- heap.Remove blockKey
+                None
+              else (* Otherwise just decrement *)
+                heap <- heap.Add (blockKey, (ref-1,arr))
+                None
+            | INC (rs) ->
+              let (arr,_,ref) = lookUpHeap (lookupReg rs regs) heap
+              let (blockKey, _) = splitAddr (lookupReg rs regs)
+              heap <- heap.Add (blockKey, (ref+1,arr))
+              None
             | CALL (f) -> 
               (* Make new register bank, only containing argument registers 
                 Each call we call a SimulateFun function which creates a fresh register bank

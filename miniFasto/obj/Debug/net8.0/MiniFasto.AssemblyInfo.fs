@@ -10,7 +10,7 @@ open System.Reflection
 [<assembly: System.Reflection.AssemblyCompanyAttribute("MiniFasto")>]
 [<assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")>]
 [<assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")>]
-[<assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+92ea7732cc1f126f7dd014033b5638520a3cd113")>]
+[<assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3a997ac47ada8bb6b5a15b2984cb6ca6daa14a92")>]
 [<assembly: System.Reflection.AssemblyProductAttribute("MiniFasto")>]
 [<assembly: System.Reflection.AssemblyTitleAttribute("MiniFasto")>]
 [<assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")>]
