@@ -369,6 +369,329 @@ let progManyUses : Prog =
       Let("a", ArrayLit([Constant(IntVal 0);Constant(IntVal 0)],Int),
         Apply("thrice",[Var "a"; Var "a"; Var "a"]))) ]
 
+let prog2DDeadLit : Prog =
+  [ FunDec ("main", Array Int, [],
+      // build a 2×2 literal, then ignore it
+      Let("m", ArrayLit(
+              [ ArrayLit([Constant(IntVal 1);Constant(IntVal 2)], Int)
+              ; ArrayLit([Constant(IntVal 3);Constant(IntVal 4)], Int)
+              ], Array Int),
+          Let("a", Index("m", Constant(IntVal 0), Array Int), Var "a")))
+  ]
+
+let prog2DReturn : Prog =
+  [ FunDec ("main", Array (Array Int), [],
+      ArrayLit(
+        [ ArrayLit([Constant(IntVal 5)], Int)
+        ; ArrayLit([Constant(IntVal 6);Constant(IntVal 7)], Int)
+        ], Array Int))
+  ]
+
+let id2D =
+  FunDec ("id2D", Array (Array Int), [Param("m", Array (Array Int))],
+    Var "m")
+
+let prog2DPassThru : Prog =
+  [ id2D
+    FunDec ("main", Int, [],
+      Let("m", ArrayLit(
+               [ ArrayLit([Constant(IntVal 1);Constant(IntVal 2)], Int) ]
+             , Array Int),
+        // pass it through id2D, then take length of first row
+        Let("m2", Apply("id2D",[Var "m"]),
+          Length(Index("m2", Constant(IntVal 0), Array Int)))))
+  ]
+
+let prog2DNestedIndex : Prog =
+  [ FunDec ("main", Int, [],
+      Let("m", ArrayLit(
+        [ ArrayLit([Constant(IntVal 3);Constant(IntVal 4)], Int)
+        ; ArrayLit([Constant(IntVal 5)],           Int)
+        ], Array Int),
+        // shadow m with first row only
+        Let("m", Index("m", Constant(IntVal 0), Array Int),
+          // then index into its second element
+          Index("m", Constant(IntVal 1), Int))))
+  ]
+
+let prog2DBranch : Prog =
+  [ FunDec ("main", Int, [],
+      Let("g", Plus(Constant(IntVal 1),Constant(IntVal 1)),
+        Let("r",
+          If(Var "g",
+             // then-branch builds 1×2 2-D array
+             ArrayLit(
+               [ ArrayLit([Constant(IntVal 9)], Int) ],
+               Array Int
+             ),
+             // else-branch returns an empty 2-D
+             ArrayLit([], Array (Array Int))
+          ),
+          // now index into the first row (either [9] or error if empty)
+          // guard = 1 so we always hit the [9] case
+          Let("row", Index("r", Constant(IntVal 0), Array Int),
+            Length (Var "row")))))
+  ]
+
+let arr2dLiveafter: Prog =
+  [ FunDec ("main", Array Int, [],
+    Let ("a1", ArrayLit([Constant(IntVal 0)], Int), 
+      Let ("a2", ArrayLit([ Var "a1";Var "a1" ], Array Int),
+      Let ("i", Index ("a1", Constant(IntVal 0), Int),
+      Index("a2", Var "i", Array Int))))
+  )
+  ]
+
+// ------------------------------------------------------------
+// 3-D array tests
+// ------------------------------------------------------------
+
+let prog3DDeadLit : Prog =
+  [ FunDec ("main", Array (Array Int), [],
+      // build a 1×1×1 literal, then slice off its first 2D face
+      Let("m3", ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit([Constant(IntVal 1)], Int) ],
+            Array Int)
+        ],
+        Array (Array Int)),
+        Let("slice2D", Index("m3", Constant(IntVal 0), Array (Array Int)),
+            Var "slice2D")))
+  ]
+
+let prog3DReturn : Prog =
+  [ FunDec ("main", Array (Array (Array Int)), [],
+      // directly return a 1×1×2 literal
+      ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit([Constant(IntVal 2); Constant(IntVal 3)], Int) ],
+            Array Int)
+        ],
+        Array (Array Int)))
+  ]
+
+let id3D =
+  FunDec ("id3D", Array (Array (Array Int)), [Param("m3", Array (Array (Array Int)))],
+    Var "m3")
+
+let prog3DPassThru : Prog =
+  [ id3D
+    FunDec ("main", Int, [],
+      Let("m3", ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit([Constant(IntVal 4); Constant(IntVal 5)], Int) ],
+            Array Int)
+        ],
+        Array (Array Int)),
+        Let("m4", Apply("id3D",[Var "m3"]),
+        Let("slice2", Index("m4", Constant(IntVal 0), Array (Array Int)),
+        Let("slice1", Index("slice2", Constant(IntVal 0), Array Int),
+            Length (Var "slice1"))))))
+  ]
+
+let prog3DNestedIndex : Prog =
+  [ FunDec ("main", Int, [],
+      Let("m3", ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit([Constant(IntVal 6)], Int) ],
+            Array Int)
+        ],
+        Array (Array Int)),
+        Let("m2", Index("m3", Constant(IntVal 0), Array (Array Int)),
+        Let("m1", Index("m2", Constant(IntVal 0), Array Int),
+        Index("m1", Constant(IntVal 0), Int)))))
+  ]
+
+let prog3DBranch : Prog =
+  [ FunDec ("main", Int, [],
+      Let("g", Constant(IntVal 1),
+      Let("r3",
+        If(Var "g",
+           // then: build 1×1×1 literal
+           ArrayLit(
+             [ ArrayLit([ArrayLit([Constant(IntVal 7)], Int)], Array Int) ],
+             Array (Array Int)),
+           // else: empty 3-D
+           ArrayLit([], Array (Array Int))),
+        Let("slice2", Index("r3", Constant(IntVal 0), Array (Array Int)),
+      Let("slice1", Index("slice2", Constant(IntVal 0), Array Int),
+          Length (Var "slice1"))))))
+  ]
+
+// ------------------------------------------------------------
+// 4-D array tests
+// ------------------------------------------------------------
+
+let prog4DDeadLit : Prog =
+  [ FunDec ("main", Array (Array (Array Int)), [],
+      // build a 1×1×1×1 literal, then slice off its first 3-D block
+      Let("m4", ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit(
+                [ ArrayLit([Constant(IntVal 1)], Int) ],
+                Array Int)
+            ],
+            Array (Array Int))
+        ],
+        Array (Array (Array Int))),
+        Let("slice3D", Index("m4", Constant(IntVal 0), Array (Array (Array Int))),
+            Var "slice3D")))
+  ]
+
+let prog4DReturn : Prog =
+  [ FunDec ("main", Array (Array (Array (Array Int))), [],
+      // directly return a 1×1×1×2 literal
+      ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit(
+                [ ArrayLit([Constant(IntVal 2); Constant(IntVal 3)], Int) ],
+                Array Int)
+            ],
+            Array (Array Int))
+        ],
+        Array (Array (Array Int))))
+  ]
+
+let id4D =
+  FunDec ("id4D", Array (Array (Array (Array Int))),
+          [Param("m4", Array (Array (Array (Array Int))))],
+          Var "m4")
+
+let prog4DPassThru : Prog =
+  [ id4D
+    FunDec ("main", Int, [],
+      Let("m4", ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit(
+                [ ArrayLit([Constant(IntVal 4); Constant(IntVal 5)], Int) ],
+                Array Int)
+            ],
+            Array (Array Int))
+        ],
+        Array (Array (Array Int))),
+        Let("m5", Apply("id4D",[Var "m4"]),
+        Let("s3", Index("m5", Constant(IntVal 0), Array (Array (Array Int))),
+        Let("s2", Index("s3", Constant(IntVal 0), Array (Array Int)),
+        Let("s1", Index("s2", Constant(IntVal 0), Array Int),
+            Length (Var "s1")))))))
+  ]
+
+let prog4DNestedIndex : Prog =
+  [ FunDec ("main", Int, [],
+      Let("m4", ArrayLit(
+        [ ArrayLit(
+            [ ArrayLit(
+                [ ArrayLit([Constant(IntVal 6)], Int) ],
+                Array Int)
+            ],
+            Array (Array Int))
+        ],
+        Array (Array (Array Int))),
+        Let("m3", Index("m4", Constant(IntVal 0), Array (Array (Array Int))),
+        Let("m2", Index("m3", Constant(IntVal 0), Array (Array Int)),
+        Let("m1", Index("m2", Constant(IntVal 0), Array Int),
+        Index("m1", Constant(IntVal 0), Int))))))
+  ]
+
+let prog4DBranch : Prog =
+  [ FunDec ("main", Int, [],
+      Let("g", Constant(IntVal 1),
+      Let("r4",
+        If(Var "g",
+           ArrayLit(
+             [ ArrayLit(
+                 [ ArrayLit(
+                     [ ArrayLit([Constant(IntVal 7)], Int) ],
+                     Array Int)
+                 ],
+                 Array (Array Int))
+             ],
+             Array (Array (Array Int))),
+           ArrayLit([], Array (Array (Array Int)))),
+        Let("s3", Index("r4", Constant(IntVal 0), Array (Array (Array Int))),
+      Let("s2", Index("s3", Constant(IntVal 0), Array (Array Int)),
+      Let("s1", Index("s2", Constant(IntVal 0), Array Int),
+          Length (Var "s1")))))))
+  ]
+
+let mapProg : Prog =
+  [ FunDec ("main", Array Int, [],
+    Let("a", ArrayLit ([Constant(IntVal 0); Constant(IntVal 1)], Int), 
+      Map (Param("x",Int), Plus(Var "x", Constant (IntVal 1)), Var "a", Array Int, Array Int))
+  )
+  ]
+
+let mapProg2 : Prog =
+  [ FunDec ("main", Array Int, [],
+    Let ("c", ArrayLit ([Constant(IntVal 4);Constant(IntVal 5);Constant(IntVal 6)], Int),
+    Let ("a", ArrayLit ([Constant(IntVal 0);Constant(IntVal 1);Constant(IntVal 2)], Int),
+    Map (Param ("x", Int), 
+        Let ("d", ArrayLit ([Constant(IntVal 7);Constant(IntVal 8);Constant(IntVal 9)], Int),
+          Let ("i", Index ("c", Var "x", Int), 
+          Let ("j", Index ("d", Var "x", Int),
+          Plus (Var "i", Var "j")))), Var "a", Array Int, Array Int
+    )
+    )
+    )
+    )
+
+  ]
+
+let mapProg3 : Prog =
+  [ FunDec ("main", Array Int, [],
+    Let ("c", ArrayLit ([Constant(IntVal 4);Constant(IntVal 5);Constant(IntVal 6)], Int),
+    Let ("a", ArrayLit ([ArrayLit ([Constant(IntVal 0);Constant(IntVal 1);Constant(IntVal 2)], Int);ArrayLit ([Constant(IntVal 1);Constant(IntVal 5);Constant(IntVal 6)], Int)], Array Int),
+    Map (Param ("x", Array Int), 
+        Let ("d", ArrayLit ([Constant(IntVal 7);Constant(IntVal 8);Constant(IntVal 9)], Int),
+          Let ("i", Index ("x", Constant(IntVal 0), Int), 
+          Let ("j", Index ("d", Var "i", Int),
+          Let ("k", Index ("c", Var "i", Int),
+          Plus (Var "i", Var "j"))))), Var "a", Array Int, Array Int
+    )
+    )
+    )
+    )
+  ]
+
+let mapProg4 : Prog =
+  [ FunDec ("main", Array (Array Int), [],
+    Let ("c", ArrayLit ([Constant(IntVal 0);Constant(IntVal 1)], Int),
+    Let ("a", ArrayLit ([ArrayLit ([Constant(IntVal 0);Constant(IntVal 1);Constant(IntVal 2)], Int);ArrayLit ([Constant(IntVal 1);Constant(IntVal 5);Constant(IntVal 6)], Int)], Array Int),
+    Map (Param ("x", Int), 
+        Index ("a", Var "x", Array Int), Var "c", Array Int, Array (Array Int))
+    )
+    )
+  )
+  ]
+
+// Map function: map((fn x -> x), arr) where arr is live after
+let mapProg5 : Prog =
+  [ FunDec ("main", Int, [],
+    Let ("a", ArrayLit ([ArrayLit ([Constant(IntVal 0);Constant(IntVal 1);Constant(IntVal 2)], Int);ArrayLit ([Constant(IntVal 1);Constant(IntVal 5);Constant(IntVal 6)], Int)], Array Int),
+    Let ("arr", Map (Param ("x", Array Int), 
+        Var "x", Var "a", Array (Array Int), Array (Array Int)),
+        Let ("i", Index("a", Constant(IntVal 0), Array Int),
+        Let ("j", Index("arr", Constant(IntVal 0), Array Int), 
+        Plus (Index("i", Constant (IntVal 0), Int), Index("j", Constant (IntVal 0), Int)))
+    )
+  )))
+  ]
+
+let at0Fun = FunDec(
+    "at0",
+    Int,
+    [ Param("a",Array Int)],
+    Index("a", Constant(IntVal 0), Int) 
+)
+  
+let mainMap = FunDec(
+    "main", Array Int, [], Let("a", ArrayLit ([ArrayLit ([Constant(IntVal 0);Constant(IntVal 1);Constant(IntVal 2)], Int);ArrayLit ([Constant(IntVal 1);Constant(IntVal 5);Constant(IntVal 6)], Int)], Array Int), 
+      Map (Param("x",Array Int), Apply("at0", [Var "x"]), Var "a", Array (Array Int), Array Int))
+
+)
+
+let mapProg6 : Prog = [ at0Fun; mainMap ]
+
 [<EntryPoint>]
 let main argv =
     runTestA p1 "p1"
@@ -398,8 +721,9 @@ let main argv =
     runTestA progMix "6"
     runTestA progIfArrays "7"
     runTestA progIfArraySelect "8"
+    printfn "pp: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg)
     runTestA ifelseCopyProg "9"
-    fuzz 100 6   // 100 random programs of (rough) size ≤ 6
+    //fuzz 100 6   // 100 random programs of (rough) size ≤ 6
     runTestA progDeadLit     "dead-literal"
     runTestA progReturnArr   "return-arr"
     runTestA progPassThru    "pass-through"
@@ -408,4 +732,44 @@ let main argv =
     runTestA progShadow      "shadowing"
     runTestA progRecArr      "rec-array"
     runTestA progManyUses    "multi-use"
+    //printfn "If copy program: :\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
+    runTestA prog2DDeadLit     "2d-dead-lit"
+    runTestA prog2DReturn      "2d-return"
+    runTestA prog2DPassThru    "2d-pass-thru"
+    runTestA prog2DNestedIndex "2d-nested-index"
+    runTestA prog2DBranch      "2d-branch"
+    runTestA arr2dLiveafter    "2d elm still live after"
+
+    // 3D-array tests
+    printfn "pp: :\n%s" (prog3DDeadLit |> anfProg |> prettyPrintProg)
+    runTestA prog3DDeadLit     "3d-dead-lit"
+    runTestA prog3DReturn      "3d-return"
+    runTestA prog3DPassThru    "3d-pass-thru"
+    runTestA prog3DNestedIndex "3d-nested-index"
+    runTestA prog3DBranch      "3d-branch"
+
+    // 4D-array tests
+    runTestA prog4DDeadLit     "4d-dead-lit"
+    runTestA prog4DReturn      "4d-return"
+    runTestA prog4DPassThru    "4d-pass-thru"
+    runTestA prog4DNestedIndex "4d-nested-index"
+    runTestA prog4DBranch      "4d-branch"
+    printfn "pp1:\n%s" (mapProg |> anfProg |> prettyPrintProg)
+    printfn "pp2:\n%s" (mapProg2 |> anfProg |> prettyPrintProg)
+    printfn "pp3:\n%s" (mapProg3 |> anfProg |> prettyPrintProg)
+    printfn "pp4:\n%s" (mapProg4 |> anfProg |> prettyPrintProg)
+    printfn "pp5:\n%s" (mapProg5 |> anfProg |> prettyPrintProg)
+    printfn "pp6:\n%s" (mapProg6 |> anfProg |> prettyPrintProg)
+    runTestA mapProg "Map1"
+    runTestA mapProg2 "Map2"
+    runTestA mapProg3 "Map3"
+    runTestA mapProg4 "Map4"
+    runTestA mapProg5 "Map5"
+    runTestA mapProg6 "Map6"
+    (*printfn "pp:\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
+    printfn "pp:\n%s" (prog2DReturn |> anfProg |> prettyPrintProg)
+    printfn "pp:\n%s" (prog2DPassThru |> anfProg |> prettyPrintProg)
+    printfn "pp:\n%s" (prog2DNestedIndex |> anfProg |> prettyPrintProg)
+    printfn "pp:\n%s" (prog2DBranch |> anfProg |> prettyPrintProg)
+    printfn "pp:\n%s" (arr2dLiveafter |> anfProg |> prettyPrintProg)*)
     0

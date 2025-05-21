@@ -9,7 +9,7 @@ type Type =
 
 type Value =
     IntVal   of int
-  | ArrayVal of Value list * Type
+  | ArrayVal of Value list * Type (* Type corresponds to element type *)
 
 let valueType = function
   | (IntVal _)         -> Int
@@ -19,17 +19,22 @@ let valueType = function
 type Exp<'T> =
     Constant  of Value
   | Var       of string
-  | ArrayLit  of Exp<'T> list * 'T
+  | ArrayLit  of Exp<'T> list * 'T (* Type corresponds to element type *)
   | Plus      of Exp<'T> * Exp<'T>
   | Let       of string * Exp<'T> * Exp<'T> // Let "a" = exp in exp 
   //Tilføj hvad er typen af den bundende variabel, er det en pointer? både i let og funktions argument
-  | Index     of string * Exp<'T> * 'T
+  | Index     of string * Exp<'T> * 'T (* Type corresponds to element type *)
   | Length    of Exp<'T>
   | If        of Exp<'T> * Exp<'T> * Exp<'T> // If exp != 0 Then exp Else exp
-  | Apply     of string * Exp<'T> list 
+  | Apply     of string * Exp<'T> list
+  (* To keep it simple, we only use anonymous functions in map, 
+     if a named function is needed then it can be called from within the anonymous func
+     param is anonymous func argument, exp1 is the body of the func, exp2 is the array.
+     The first 'T is the input array type, the second 'T is the output array type*)
+  | Map       of Param * Exp<'T> * Exp<'T> * 'T * 'T
 
+and Param = Param of string * Type
 type TypedExp = Exp<Type>
-type Param = Param of string * Type
 type FunDec = FunDec of string * Type * Param list * Exp<Type>
 type Prog = FunDec list
 
@@ -61,8 +66,8 @@ type PseudoRV =
 
   | ALLOC of reg*reg    (* ALLOC(rd,rs):    rd = adress of rs allocated words *)
   | INC   of reg        (* INC(rs):         Increment ref counter at rs address*)
-  | DEC   of reg        (* DEC(rs):         Decrement ref counter at rs address. If 0, Free *)
-
+  | DEC   of reg*imm    (* DEC(rs,imm):     Decrement ref counter at rs address. If 0, Free. 
+                        The imm for inc and dec states the number of dimensions in the array *)
   | CALL  of addr
   | RET
 
@@ -162,6 +167,24 @@ let rec evalExp (e : TypedExp) (vtab : VarTableI) (ftab : FunTable): Value =
           | Some fn -> 
             let args = List.map (fun e -> evalExp e vtab ftab) es
             callFun fn args vtab ftab
+  | Map (Param(arg,argtp), fbody, arre, arInT, arOutT) ->
+        let vs = 
+          match evalExp arre vtab ftab with
+          | IntVal _ -> failwith "Map function applied to integer"
+          | ArrayVal(vs,tp) -> 
+            if tp = argtp then vs
+            else failwith "Type mismatch in map function argument"
+        let elmOutT = match arOutT with
+                      | Int -> failwith "Map must return an array!"
+                      | Array t -> t
+        let len = List.head vs
+        vs 
+        |> List.tail
+        |> List.map (fun v -> 
+            let nvtab = bind arg v vtab
+            evalExp fbody nvtab ftab)
+        |> fun x -> ArrayVal (len::x, elmOutT)
+        
 
 and callFun (fn : FunDec) (args : Value list) (vtab : VarTableI) (ftab : FunTable) =
     let (FunDec(fid, t, fargs, e)) = fn
@@ -279,6 +302,7 @@ let rec compileExp  (e      : TypedExp)
                    |> List.mapi (fun i e -> compileExp e vtable (getArgReg i f)) 
                    |> List.concat
     argsCode @ [CALL f; MV(place, Rret)]
+  | Map (_, _, _, _, _) -> failwith "Map not yet implemented in standart compiler"
 
 let compileFun (fn : FunDec) : (string * (reg list * PseudoRV list)) =
     let (FunDec (fname, tp, args, exp)) = fn
@@ -416,19 +440,37 @@ let simulate (prog : RVProg) : (int * Heap) =
               regs <- updateReg rd (joinAddr hp 0) regs
               hp <- hp + 1
               None
-            | DEC (rs) ->
-              let (arr,_,ref) = lookUpHeap (lookupReg rs regs) heap
-              let (blockKey, _) = splitAddr (lookupReg rs regs)
-              (* If ref count is 1, free the array *)
-              if ref = 1 then 
-                heap <- heap.Remove blockKey
-                None
-              else (* Otherwise just decrement *)
-                heap <- heap.Add (blockKey, (ref-1,arr))
-                None
+            | DEC (rs,d) ->
+              (* Decrement a 1d array *)
+              let dec (addr : int) =
+                let (arr,_,ref) = lookUpHeap addr heap
+                let (blockKey, _) = splitAddr addr
+                (* If ref count is 1, free the array *)
+                if ref = 1 then heap <- heap.Remove blockKey
+                (* Otherwise just decrement *)
+                else heap <- heap.Add (blockKey, (ref-1,arr))
+
+              (* Decrement an array of any dimension, 
+                 if the array is to be freed, also decrement all the subarrays *)
+              let rec decMD (addr : int) (dim : int)  =
+                let (ar,_,ref) = lookUpHeap addr heap
+                if ref = 1 then (* Check if array will be freed *)
+                  let arr = Array.tail ar (* Get array without size field *)
+                  if dim = 2 then
+                    Array.iter dec arr
+                  elif dim > 2 then
+                    Array.iter (fun a -> decMD a (dim-1)) arr
+                  elif dim < 1 then 
+                    failwith (sprintf "Array with reference count below 1 found: %A" arr)
+                dec addr
+
+              let adr = lookupReg rs regs
+              decMD adr d
+              None
             | INC (rs) ->
-              let (arr,_,ref) = lookUpHeap (lookupReg rs regs) heap
-              let (blockKey, _) = splitAddr (lookupReg rs regs)
+              let addr = lookupReg rs regs
+              let (arr,_,ref) = lookUpHeap addr heap
+              let (blockKey, _) = splitAddr addr
               heap <- heap.Add (blockKey, (ref+1,arr))
               None
             | CALL (f) -> 

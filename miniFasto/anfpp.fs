@@ -44,6 +44,14 @@ let rec ppAComp (c : AComp) : string =
                 (ppAVal cond)
                 (ppANorm aThen)
                 (ppANorm aElse)
+    | MapA(MiniFasto.Param(arg,argtp), fbody, arr, t1, t2) ->
+        sprintf "Map(fn %s (%s %s) => \n%s, %s)\n"
+            (ppType t2)
+            (ppType argtp)
+            arg
+            (ppANorm fbody)
+            (ppAVal arr)
+
 
 // Recursively pretty-print ANorm
 // We'll produce lines that look like:
@@ -63,13 +71,13 @@ and ppANorm (a : ANorm) : string =
     | IncA(x, body) ->
         let bodyStr = ppANorm body
         sprintf "inc %s in\n%s" x bodyStr
-    | DecA(x, body) ->
+    | DecA(x, d,body) ->
         // e.g. drop x in body
         // We'll do:
         // drop x
         // <ppBody>
         let bodyStr = ppANorm body
-        sprintf "dec %s in\n%s" x bodyStr
+        sprintf "dec %s, %i in\n%s" x d bodyStr
 
 // For convenience, define a top-level function that
 // produces a nice multi-line string
@@ -79,7 +87,7 @@ let prettyPrint (a : ANorm) : string =
 
 let ppAFunDec (f : AFunDec) : string =
     let (AFunDec (fname, tp, args, A)) = f
-    let argString = args |> List.fold (fun s (MiniFasto.Param (arg,tp)) -> s + arg + ": " + ppType tp + ", " ) "" 
+    let argString = args |> List.fold (fun s (MiniFasto.Param (arg,tp)) -> s + ppType tp + " " + arg + ", ") "" 
     let argString' = argString.[.. argString.Length - 3]
     sprintf "%s(%s):\n%s" fname argString' (prettyPrint A)
 

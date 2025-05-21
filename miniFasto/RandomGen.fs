@@ -2,6 +2,8 @@ module RandomGen
 open System            // Random, List, etc.
 open MiniFasto         // Int, Array, TypedExp, …
 
+(* Create random programs, just for testing, made by chat GPT*)
+
 // -----------------------------------------------------------------------------
 // helpers
 // -----------------------------------------------------------------------------
