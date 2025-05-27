@@ -617,7 +617,7 @@ let prog4DBranch : Prog =
 let mapProg : Prog =
   [ FunDec ("main", Array Int, [],
     Let("a", ArrayLit ([Constant(IntVal 0); Constant(IntVal 1)], Int), 
-      Map (Param("x",Int), Plus(Var "x", Constant (IntVal 1)), Var "a", Array Int, Array Int))
+      Map (Param("x",Int), Plus(Var "x", Constant (IntVal 1)), Var "a", Array Int,  Array Int))
   )
   ]
 
@@ -721,7 +721,7 @@ let main argv =
     runTestA progMix "6"
     runTestA progIfArrays "7"
     runTestA progIfArraySelect "8"
-    printfn "pp: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg)
+    //printfn "pp: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg)
     runTestA ifelseCopyProg "9"
     //fuzz 100 6   // 100 random programs of (rough) size ≤ 6
     runTestA progDeadLit     "dead-literal"
@@ -741,7 +741,7 @@ let main argv =
     runTestA arr2dLiveafter    "2d elm still live after"
 
     // 3D-array tests
-    printfn "pp: :\n%s" (prog3DDeadLit |> anfProg |> prettyPrintProg)
+    //printfn "pp: :\n%s" (prog3DDeadLit |> anfProg |> prettyPrintProg)
     runTestA prog3DDeadLit     "3d-dead-lit"
     runTestA prog3DReturn      "3d-return"
     runTestA prog3DPassThru    "3d-pass-thru"
@@ -754,12 +754,12 @@ let main argv =
     runTestA prog4DPassThru    "4d-pass-thru"
     runTestA prog4DNestedIndex "4d-nested-index"
     runTestA prog4DBranch      "4d-branch"
-    printfn "pp1:\n%s" (mapProg |> anfProg |> prettyPrintProg)
+    (*printfn "pp1:\n%s" (mapProg |> anfProg |> prettyPrintProg)
     printfn "pp2:\n%s" (mapProg2 |> anfProg |> prettyPrintProg)
     printfn "pp3:\n%s" (mapProg3 |> anfProg |> prettyPrintProg)
     printfn "pp4:\n%s" (mapProg4 |> anfProg |> prettyPrintProg)
     printfn "pp5:\n%s" (mapProg5 |> anfProg |> prettyPrintProg)
-    printfn "pp6:\n%s" (mapProg6 |> anfProg |> prettyPrintProg)
+    printfn "pp6:\n%s" (mapProg6 |> anfProg |> prettyPrintProg)*)
     runTestA mapProg "Map1"
     runTestA mapProg2 "Map2"
     runTestA mapProg3 "Map3"

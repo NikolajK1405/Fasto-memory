@@ -3,9 +3,12 @@ module MiniFasto
    minimal error handling as this will be used carefully *)
 
 (* Simple abstract syntax, subset of AbSyn.fs, only int, array, let and iotas*)
+type fname = string
+type vname = string
+
 type Type =
     Int
-  | Array of Type
+  | Array of Type 
 
 type Value =
     IntVal   of int
@@ -15,27 +18,25 @@ let valueType = function
   | (IntVal _)         -> Int
   | (ArrayVal (_,tp))  -> Array tp
 
-(* Should we have If statements? *)
 type Exp<'T> =
     Constant  of Value
-  | Var       of string
-  | ArrayLit  of Exp<'T> list * 'T (* Type corresponds to element type *)
+  | Var       of vname
+  | ArrayLit  of Exp<'T> list * 'T 
   | Plus      of Exp<'T> * Exp<'T>
-  | Let       of string * Exp<'T> * Exp<'T> // Let "a" = exp in exp 
-  //Tilføj hvad er typen af den bundende variabel, er det en pointer? både i let og funktions argument
-  | Index     of string * Exp<'T> * 'T (* Type corresponds to element type *)
+  | Let       of vname * Exp<'T> * Exp<'T> (* Let "a" = exp in exp *)
+  | Index     of vname * Exp<'T> * 'T 
   | Length    of Exp<'T>
-  | If        of Exp<'T> * Exp<'T> * Exp<'T> // If exp != 0 Then exp Else exp
-  | Apply     of string * Exp<'T> list
+  | If        of Exp<'T> * Exp<'T> * Exp<'T> (* If exp != 0 Then exp Else exp *)
+  | Apply     of fname * Exp<'T> list
   (* To keep it simple, we only use anonymous functions in map, 
      if a named function is needed then it can be called from within the anonymous func
      param is anonymous func argument, exp1 is the body of the func, exp2 is the array.
      The first 'T is the input array type, the second 'T is the output array type*)
   | Map       of Param * Exp<'T> * Exp<'T> * 'T * 'T
 
-and Param = Param of string * Type
+and Param = Param of vname * Type
 type TypedExp = Exp<Type>
-type FunDec = FunDec of string * Type * Param list * Exp<Type>
+type FunDec = FunDec of fname * Type * Param list * Exp<Type>
 type Prog = FunDec list
 
 (* ----------------------------------------------------------------------- *)
@@ -101,8 +102,8 @@ let bind n i (SymTab stab) = SymTab ((n,i)::stab)
 let combine (SymTab t1) (SymTab t2) = SymTab (t1 @ t2)
 
 type VarTableI = SymTab<Value> (* Interpretor vartable *)
-type VarTableC = SymTab<reg>   (* Compiler vartable *)
 type FunTable  = SymTab<FunDec>
+type VarTableC = SymTab<reg>   (* Compiler vartable *)
 
 (* ----------------------------------------------------------------------- *)
 (* Interpretor *)
@@ -383,9 +384,9 @@ let rec getLabCode (fcode : PseudoRV list) (lab : addr) =
     | v::vs -> getLabCode vs lab
     | [] -> failwith (sprintf "Unkown label %s" lab)
 
-let simulate (prog : RVProg) : (int * Heap) =
+let simulate (iHeap : Heap) (prog : RVProg) : (int * Heap) =
     (* Initialize heap *)
-    let mutable heap: Heap = Map.empty
+    let mutable heap: Heap = iHeap (* iHeap = initial heap *)
     let mutable hp = 0
     (* Simulate a function with argument registers and value, return the return-value *)
     let rec simulateFun (regArgs : reg list, fcode : PseudoRV list) (valArgs : int list) : int =
@@ -487,7 +488,6 @@ let simulate (prog : RVProg) : (int * Heap) =
         (* Iterate trough the code, making jumps and call apropriatly *)
         let rec simulateBlock (blockCode : PseudoRV list) : int =
             match blockCode with
-            (* TODO: Handle function calls*)
             (* If we get a label, find the code and continue simulating from there*)
             | inst::rst -> match simulateInst inst with 
                            | None -> simulateBlock rst
@@ -504,7 +504,7 @@ let simulate (prog : RVProg) : (int * Heap) =
     (res,heap)
 
 let compileSimulate (prog : Prog) : (int * Heap) =
-    compileProg prog |> simulate
+    compileProg prog |> simulate Map.empty
 
 (* ----------------------------------------------------------------------- *)
 (* Tests *)
