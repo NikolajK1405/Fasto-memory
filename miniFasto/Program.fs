@@ -677,6 +677,20 @@ let mainMap = FunDec(
 
 let mapProg6 : Prog = [ at0Fun; mainMap ]
 
+let mapProg7 : Prog =
+  [ FunDec ("main", Array(Array Int), [],
+    Let("a", ArrayLit ([Constant(IntVal 0); Constant(IntVal 1)], Int), 
+      Map (Param("x",Int), Var "a", Var "a", Array Int,  Array(Array Int)))
+  )
+  ]
+let mapProg8 : Prog =
+  [ FunDec ("main", Array(Array Int), [],
+    Let("a", ArrayLit ([Constant(IntVal 0); Constant(IntVal 1)], Int),
+    Let("b", ArrayLit ([Constant(IntVal 2); Constant(IntVal 3)], Int),
+      Map (Param("x",Int), Var "a", Var "b", Array Int,  Array(Array Int)))
+  ))
+  ]
+
 let shadowProg : Prog =
   [ FunDec ("main", Int, [],
     Let ("a", Constant(IntVal 2),
@@ -779,6 +793,10 @@ let main argv =
     runTestA mapProg4 "Map4"
     runTestA mapProg5 "Map5"
     runTestA mapProg6 "Map6"
+    printfn "pp:\n%s" (mapProg7 |> anfProg |> prettyPrintProg)
+    runTestA mapProg7 "Map7"
+    printfn "pp:\n%s" (mapProg8 |> anfProg |> prettyPrintProg)
+    runTestA mapProg8 "Map8"
     runTestA shadowProg "shadow"
     (*printfn "pp:\n%s" (shadowProg |> anfProg |> prettyPrintProg)
     printfn "pp:\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
