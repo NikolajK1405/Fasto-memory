@@ -8,7 +8,7 @@ let sumFun = FunDec(
     [ Param("a",Int); Param("b",Int) ],
     Plus( Var("a"), Var("b") ) 
 )
-let eSum : TypedExp =
+let eSum : Exp =
     Apply("sum", [ Constant(IntVal 10)
                    Constant(IntVal 32) ]) 
 let mainFun = FunDec(
@@ -18,7 +18,7 @@ let mainFun = FunDec(
 let progSum : Prog = [ sumFun; mainFun ]
 
 (* If test *)
-let eIfTest : TypedExp =
+let eIfTest : Exp =
     If(Constant(IntVal 0),
        Constant(IntVal 123),
        Constant(IntVal 999)
@@ -75,8 +75,8 @@ let mainSumTo = FunDec(
 let progSumDown : Prog = [ sumToFun; mainSumTo ]
 
 (* Build program with a function list and main function*)
-let buildProg (funs : (string * Param list * TypedExp) list)
-              (mainBody : TypedExp)
+let buildProg (funs : (string * Param list * Exp) list)
+              (mainBody : Exp)
               : Prog =
 
     let funDecs =
@@ -89,7 +89,7 @@ let buildProg (funs : (string * Param list * TypedExp) list)
     funDecs @ [mainDec]  
 
 (* Build program from just an expression *)
-let buildProgExpr (mainBody : TypedExp) (retType : Type): Prog =
+let buildProgExpr (mainBody : Exp) (retType : Type): Prog =
     // simply wrap the expression in a main function
     [ FunDec("main", retType, [], mainBody) ]
 
@@ -196,22 +196,22 @@ let progMix : Prog = [ sumHeadsFun; mainMix ]
 (* ----------------------------------------------------------- *)
 
 /// then-branch (b1)
-let b1 : TypedExp =
+let b1 : Exp =
     Let("t1", Index("arr1", Constant(IntVal 1), Int),      // t1 = arr1[1]
     Let("t2", Index("arr3", Constant(IntVal 2), Int),      // t2 = arr3[2]
     Let("t3", Plus(Var "t1", Var "t2"),                    // t3 = t1 + t2
         Var "t3")))                                        // result  t3
 
 /// else-branch (b2)
-let b2 : TypedExp =
+let b2 : Exp =
     Let("t1", Index("arr2", Constant(IntVal 2), Int),      // t1 = arr2[2]
     Let("t2", Index("arr4", Constant(IntVal 1), Int),      // t2 = arr4[1]
     Let("t3", Plus(Var "t1", Var "t2"),                    // t3 = t1 + t2
         Var "t3")))
 
 /// whole body of main
-let mainBody : TypedExp =
-    Let ("g", Constant(IntVal 1), 
+let mainBody : Exp =
+    Let ("g", Plus (Constant (IntVal 1),Constant (IntVal 1)), 
     Let("arr1", ArrayLit([ Constant(IntVal 1)
                            Constant(IntVal 2)
                            Constant(IntVal 3) ], Int),
@@ -239,8 +239,8 @@ let mainIfArrays =
 /// whole program
 let progIfArrays : Prog = [ mainIfArrays ]
 
-let ifArraySelect : TypedExp =
-    Let("g", Constant(IntVal 1),
+let ifArraySelect : Exp =
+    Let("g", Plus (Constant (IntVal 1),Constant (IntVal 1)),
     Let("y", ArrayLit([ Constant(IntVal 1)
                         Constant(IntVal 2)
                         Constant(IntVal 3) ], Int),
@@ -255,23 +255,20 @@ let ifArraySelect : TypedExp =
 let progIfArraySelect : Prog = buildProgExpr ifArraySelect Int
 
 // array literals
-let yArr : TypedExp =
+let yArr : Exp =
     ArrayLit ( [ Constant (IntVal 1)
                  Constant (IntVal 2)
                  Constant (IntVal 3) ],
                Int )                    // element type
 
-let zArr : TypedExp =
+let zArr : Exp =
     ArrayLit ( [ Constant (IntVal 4)
                  Constant (IntVal 5)
                  Constant (IntVal 6) ],
                Int )
 
-// condition for the if - expression
-let cond : TypedExp = Constant (IntVal 1)   // “true”
-
 // build the nested lets
-let ifelseCopy : TypedExp =
+let ifelseCopy : Exp =
     Let ("y", yArr,
      Let ("z", zArr,
      Let ("g", Plus (Constant (IntVal 1),Constant (IntVal 1)),
@@ -287,18 +284,6 @@ let ifelseCopyProg : Prog =
               Int,                 // return type
               [],                  // no parameters
               ifelseCopy) ]          // function body
-open RandomGen
-
-let fuzz count size =
-  for i = 1 to count do
-    let prog = genProg size
-    try
-      //printfn "fuzz-%d:\n%s" i (prog |> anfProg |> prettyPrintProg)
-      runTestA prog (sprintf "fuzz-%d" i)
-    with ex ->
-      printfn "‼️ crash in fuzz-%d: %s" i ex.Message
-      printfn "%s" (prog |> anfProg |> prettyPrintProg)
-      raise ex
 
 let progDeadLit : Prog =
   [ FunDec ("main", Int, [],
@@ -692,6 +677,32 @@ let mainMap = FunDec(
 
 let mapProg6 : Prog = [ at0Fun; mainMap ]
 
+let shadowProg : Prog =
+  [ FunDec ("main", Int, [],
+    Let ("a", Constant(IntVal 2),
+    Let ("b", Var "a",
+    Let ("a", Constant(IntVal 4),
+    Plus (Var "a", Var "b")))))
+  ]
+
+// If branch return a local variable
+let ifCopyLocal : Exp =
+    Let ("y", yArr,
+     Let ("z", zArr,
+     Let ("g", Plus (Constant (IntVal 1),Constant (IntVal 1)),
+      Let ("x", If (Var "g", Let ("y", yArr,Var "y"), Var "z"),
+       Let ("v", Index ("x", Constant (IntVal 1), Int),  // v = x[1]
+        Let("u", Index ("y", Constant (IntVal 1), Int),
+        Let("p", Plus(Var "u",Var "v"),
+        Var "p")))))))
+
+// wrap it in a one-function programme
+let ifCopyLocalProg : Prog =
+    [ FunDec ("main",              // function name
+              Int,                 // return type
+              [],                  // no parameters
+              ifCopyLocal) ]          // function body
+
 [<EntryPoint>]
 let main argv =
     runTestA p1 "p1"
@@ -712,7 +723,9 @@ let main argv =
     printfn "One array dies after function, the other is still live\n%s" (progMix      |> anfProg |> prettyPrintProg)
     printfn "If program: :\n%s" (progIfArrays |> anfProg |> prettyPrintProg)
     printfn "If program: :\n%s" (progIfArraySelect |> anfProg |> prettyPrintProg)
-    printfn "If copy program: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg) *)
+    printfn "If copy program: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg) 
+    printfn "If copy local program: :\n%s" (ifCopyLocalProg |> anfProg |> prettyPrintProg) *)
+    runTestA ifCopyLocalProg "0"
     runTestA p5 "1"
     runTestA multiProg "2"
     runTestA unusedProg "3"
@@ -766,7 +779,9 @@ let main argv =
     runTestA mapProg4 "Map4"
     runTestA mapProg5 "Map5"
     runTestA mapProg6 "Map6"
-    (*printfn "pp:\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
+    runTestA shadowProg "shadow"
+    (*printfn "pp:\n%s" (shadowProg |> anfProg |> prettyPrintProg)
+    printfn "pp:\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
     printfn "pp:\n%s" (prog2DReturn |> anfProg |> prettyPrintProg)
     printfn "pp:\n%s" (prog2DPassThru |> anfProg |> prettyPrintProg)
     printfn "pp:\n%s" (prog2DNestedIndex |> anfProg |> prettyPrintProg)

@@ -18,25 +18,25 @@ let valueType = function
   | (IntVal _)         -> Int
   | (ArrayVal (_,tp))  -> Array tp
 
-type Exp<'T> =
+type Param = Param of vname * Type
+
+type Exp =
     Constant  of Value
   | Var       of vname
-  | ArrayLit  of Exp<'T> list * 'T 
-  | Plus      of Exp<'T> * Exp<'T>
-  | Let       of vname * Exp<'T> * Exp<'T> (* Let "a" = exp in exp *)
-  | Index     of vname * Exp<'T> * 'T 
-  | Length    of Exp<'T>
-  | If        of Exp<'T> * Exp<'T> * Exp<'T> (* If exp != 0 Then exp Else exp *)
-  | Apply     of fname * Exp<'T> list
+  | ArrayLit  of Exp list * Type
+  | Plus      of Exp * Exp
+  | Let       of vname * Exp * Exp (* Let "a" = exp in exp *)
+  | Index     of vname * Exp * Type 
+  | Length    of Exp
+  | If        of Exp * Exp * Exp (* If exp != 0 Then exp Else exp *)
+  | Apply     of fname * Exp list
   (* To keep it simple, we only use anonymous functions in map, 
      if a named function is needed then it can be called from within the anonymous func
      param is anonymous func argument, exp1 is the body of the func, exp2 is the array.
      The first 'T is the input array type, the second 'T is the output array type*)
-  | Map       of Param * Exp<'T> * Exp<'T> * 'T * 'T
+  | Map       of Param * Exp * Exp * Type * Type
 
-and Param = Param of vname * Type
-type TypedExp = Exp<Type>
-type FunDec = FunDec of fname * Type * Param list * Exp<Type>
+type FunDec = FunDec of fname * Type * Param list * Exp
 type Prog = FunDec list
 
 (* ----------------------------------------------------------------------- *)
@@ -53,24 +53,24 @@ let labRet : addr = "ret"
 type PseudoRV =
   | LABEL of addr
 
-  | LI  of reg*imm      (* LI(rd,imm):      rd = imm *)
-  | MV  of reg*reg      (* MV(rd,rs):       rd = rs *)
+  | LI  of reg*imm         (* LI(rd,imm):      rd = imm *)
+  | MV  of reg*reg         (* MV(rd,rs):       rd = rs *)
 
-  | ADDI of reg*reg*imm (* ADDI(rd,rs,imm): rd = rs + imm*)
-  | ADD  of reg*reg*reg (* ADD(rd,r1,r2):   rd = r1 + r2 *)
+  | ADDI of reg*reg*imm    (* ADDI(rd,rs,imm): rd = rs + imm*)
+  | ADD  of reg*reg*reg    (* ADD(rd,r1,r2):   rd = r1 + r2 *)
 
-  | LW of reg*reg*imm   (* LW(rd,rs,imm):   rd = *(int* )(rs + imm) *)
-  | SW of reg*reg*imm   (* SW(rd,rs,imm):   *(int* )(rs + imm) = rd *)
+  | LW of reg*reg*imm      (* LW(rd,rs,imm):   rd = *(int* )(rs + imm) *)
+  | SW of reg*reg*imm      (* SW(rd,rs,imm):   *(int* )(rs + imm) = rd *)
 
-  | BEQ of reg*reg*addr (* BEQ(r1,r2,addr): if ($r1 == $r2) goto(addr) *)
-  | J   of addr         (* J(addr):         goto(addr) *)
+  | BEQ of reg*reg*addr    (* BEQ(r1,r2,addr): if ($r1 == $r2) goto(addr) *)
+  | J   of addr            (* J(addr):         goto(addr) *)
 
-  | ALLOC of reg*reg    (* ALLOC(rd,rs):    rd = adress of rs allocated words *)
-  | INC   of reg        (* INC(rs):         Increment ref counter at rs address*)
-  | DEC   of reg*imm    (* DEC(rs,imm):     Decrement ref counter at rs address. If 0, Free. 
-                        The imm for inc and dec states the number of dimensions in the array *)
-  | CALL  of addr
-  | RET
+  | ALLOC of reg*reg       (* ALLOC(rd,rs):    rd = adress of rs allocated words *)
+  | INC   of reg           (* INC(rs):         Increment ref counter at rs address*)
+  | DEC   of reg*imm       (* DEC(rs,imm):     Decrement ref counter at rs address. If 0, Free. imm = dimensionality*)
+
+  | CALL  of addr*reg list (* CALL(addr,regs): Call function at addr with list of actual parameters *) 
+  | RET                    (* RET(rd):         Return from a function, result placed in Rret*)
 
 
 let mutable counter = 1
@@ -84,46 +84,31 @@ let newVar name = newName name
 
 let getArgReg (i : int) (fname : string) = fname + "_arg_" + string i
 let getFname fname : addr = "f."+ fname
-(* ----------------------------------------------------------------------- *)
-(* Symbol table *)
-type SymTab<'a> = SymTab of (string * 'a) list
 
-let empty () = SymTab []
-
-let rec lookup n tab =
-  match tab with
-    | SymTab [] -> None
-    | SymTab ((n1,i1)::remtab) ->
-        if n = n1
-        then Some i1
-        else lookup n (SymTab remtab)
-
-let bind n i (SymTab stab) = SymTab ((n,i)::stab)
-let combine (SymTab t1) (SymTab t2) = SymTab (t1 @ t2)
-
-type VarTableI = SymTab<Value> (* Interpretor vartable *)
-type FunTable  = SymTab<FunDec>
-type VarTableC = SymTab<reg>   (* Compiler vartable *)
+(* Symbol tables *)
+type VarTableI = Map<vname,Value> (* Interpretor tables *)
+type FunTableI  = Map<fname,FunDec>
+type VarTableC = Map<vname,reg>   (* Compiler vartable *)
 
 (* ----------------------------------------------------------------------- *)
 (* Interpretor *)
-let rec bindParamsI (fargs : Param list) (args : Value list) (fid : string)=
+let rec bindParamsI (fargs : Param list) (args : Value list) (fid : string) : VarTableI =
     match fargs, args with
-    | [], [] -> empty ()
+    | [], [] -> Map.empty
     | Param (n, t)::ps, v::vs ->
         let vtab = bindParamsI ps vs fid
         if (valueType v) = t then
-          match lookup n vtab with
-          | None -> bind n v vtab
+          match Map.tryFind n vtab with
+          | None -> Map.add n v vtab
           | Some _ -> failwith (sprintf "Tried to bind existing function argument %s in function: %s" n fid)
         else failwith (sprintf "Incorrect type for function argument\n
                         Function %s expected: %A, got: %A" fid t (valueType v))
     | _, _ -> failwith (sprintf "Mismatch in formal and actual parameters for function: %s" fid)
 
-let rec evalExp (e : TypedExp) (vtab : VarTableI) (ftab : FunTable): Value =
+let rec evalExp (e : Exp) (vtab : VarTableI) (ftab : FunTableI): Value =
     match e with
     Constant(v) -> v
-  | Var(id) -> match (lookup id vtab) with
+  | Var(id) -> match (Map.tryFind id vtab) with
                | Some v -> v
                | None   -> failwith (sprintf "Unkown variable %s" id)
   | ArrayLit(l, t) ->
@@ -138,11 +123,11 @@ let rec evalExp (e : TypedExp) (vtab : VarTableI) (ftab : FunTable): Value =
           | (_, _) -> failwith "Type mismatch in plus operation"
   | Let(id, e1, e2) ->
         let res   = evalExp e1 vtab ftab
-        let nvtab = bind id res vtab
+        let nvtab = Map.add id res vtab
         evalExp e2 nvtab ftab
   | Index(id, e1, t) ->
         let indv = evalExp e1 vtab ftab
-        let arr = lookup id vtab
+        let arr = Map.tryFind id vtab
         match (arr, indv) with
           | (None, _) -> failwith "Non existing array variable"
           | (Some (ArrayVal(lst, t)), IntVal ind) ->
@@ -163,11 +148,11 @@ let rec evalExp (e : TypedExp) (vtab : VarTableI) (ftab : FunTable): Value =
           | IntVal 0 -> evalExp e3 vtab ftab (* Else *)
           | _        -> evalExp e2 vtab ftab (* Then *)
   | Apply (f, es) ->
-        match (lookup f ftab) with
+        match Map.tryFind f ftab with
           | None -> failwith (sprintf "No such function: %s" f)
           | Some fn -> 
             let args = List.map (fun e -> evalExp e vtab ftab) es
-            callFun fn args vtab ftab
+            callFun fn args ftab
   | Map (Param(arg,argtp), fbody, arre, arInT, arOutT) ->
         let vs = 
           match evalExp arre vtab ftab with
@@ -182,28 +167,28 @@ let rec evalExp (e : TypedExp) (vtab : VarTableI) (ftab : FunTable): Value =
         vs 
         |> List.tail
         |> List.map (fun v -> 
-            let nvtab = bind arg v vtab
+            let nvtab = Map.add arg v vtab
             evalExp fbody nvtab ftab)
         |> fun x -> ArrayVal (len::x, elmOutT)
         
 
-and callFun (fn : FunDec) (args : Value list) (vtab : VarTableI) (ftab : FunTable) =
+and callFun (fn : FunDec) (args : Value list) (ftab : FunTableI) : Value =
     let (FunDec(fid, t, fargs, e)) = fn
-    let nvtab = combine (bindParamsI fargs args fid) vtab
+    let nvtab = bindParamsI fargs args fid 
     let res = evalExp e nvtab ftab
     if (valueType res) = t then res
     else failwith (sprintf "Result of function %s: %A, does not match expected output: %A" fid (valueType res) t)
 
-let evalProg (prog : Prog) =
+let evalProg (prog : Prog) : Value =
     let ftab =
       prog |> List.fold (fun ftab fn -> 
                         let (FunDec(fid, _, _, _)) = fn
-                        bind fid fn ftab) (empty())
+                        Map.add fid fn ftab) Map.empty
     let (FunDec(_, _, _, e)) = 
-      match lookup "main" ftab with
+      match Map.tryFind "main" ftab with
       | None -> failwith "No main function found"
       | Some f -> f
-    evalExp e (empty()) ftab
+    evalExp e Map.empty ftab
 
 (* ----------------------------------------------------------------------- *)
 (* Code generator *)
@@ -211,7 +196,7 @@ let evalProg (prog : Prog) =
 (* Risc-v program is a map of function names with arguments and a list of instructions*)
 type RVProg = Map<string, reg list * PseudoRV list>
 
-let rec compileExp  (e      : TypedExp)
+let rec compileExp  (e      : Exp)
                     (vtable : VarTableC)
                     (place  : reg)
                   : PseudoRV list =
@@ -224,7 +209,7 @@ let rec compileExp  (e      : TypedExp)
     let arraylit = ArrayLit(List.map (fun v -> Constant (v)) vs, tp)
     compileExp arraylit vtable place
   | Var (id) -> 
-    match lookup id vtable with
+    match Map.tryFind id vtable with
     | Some reg -> [ MV(place, reg) ]
     | None -> failwith (sprintf "Unkown variable %s" id)
   | ArrayLit (elems, tp) ->
@@ -256,7 +241,7 @@ let rec compileExp  (e      : TypedExp)
     let t = newReg ("let_" + id)
     (* Compile e1 and put result into t *)
     let code1 = compileExp e1 vtable t
-    let vtab1 = bind id t vtable
+    let vtab1 = Map.add id t vtable
     (* Compile e2 with the new vtable*)
     let code2 = compileExp e2 vtab1 place
     code1 @ code2
@@ -268,7 +253,7 @@ let rec compileExp  (e      : TypedExp)
 
     (* Computer pointer to start of array data segment *)
     let arrReg = newReg "arr_data" // Data pointer
-    let arrBeg = match lookup id vtable with // Array pointer
+    let arrBeg = match Map.tryFind id vtable with // Array pointer
                  | None -> failwith (sprintf "Array %s not found" id)
                  | Some regName -> regName
     let initCode = [ ADDI (arrReg, arrBeg, 1) ] // arrReg = arrBeg + 4
@@ -298,26 +283,27 @@ let rec compileExp  (e      : TypedExp)
       [ J endLabel; LABEL elseLabel ] @
       code3 @ [LABEL endLabel]
   | Apply (f, es) -> 
-    (* Compile each argument expression, place in the symbolic argument registers *)
-    let argsCode = es
-                   |> List.mapi (fun i e -> compileExp e vtable (getArgReg i f)) 
-                   |> List.concat
-    argsCode @ [CALL f; MV(place, Rret)]
+    (* Compile each argument expression, place in fresh actual parameter registers *)
+    let argsCode,regs = es
+                        |> List.fold (fun (code, argR) e -> 
+                        let argReg = newReg (f+"arg")
+                        code@(compileExp e vtable argReg),argR@[argReg]) ([],[])
+    argsCode @ [CALL (f,regs); MV(place, Rret)]
   | Map (_, _, _, _, _) -> failwith "Map not yet implemented in standart compiler"
 
 let compileFun (fn : FunDec) : (string * (reg list * PseudoRV list)) =
     let (FunDec (fname, tp, args, exp)) = fn
     (* Get function label *)
     let funLab = getFname fname
-    (* Bind each formal argument to the symbolic argument registers 
+    (* Bind each formal argument to fresh formal parameter registers 
        We use a list.fold to accumulate the vtable along with a counter 
        for generation of argument registers *)
     let (_, vtab, argRegs) = 
         args 
         |> List.fold (fun (i, tab, regs) (Param (arg, _)) -> 
-         let regName = getArgReg i fname
-         (i+1, bind arg regName tab, regs@[regName])) 
-         (0, empty(), [])
+         let regName = newReg (fname+"parm")
+         (i+1, Map.add arg regName tab, regs@[regName])) 
+         (0, Map.empty, [])
     (* Compile expression using argument registers and place in return register *)
     let fCode = compileExp exp vtab Rret
     fname, (argRegs, [LABEL funLab] @ fCode @ [RET])
@@ -392,8 +378,7 @@ let simulate (iHeap : Heap) (prog : RVProg) : (int * Heap) =
     let rec simulateFun (regArgs : reg list, fcode : PseudoRV list) (valArgs : int list) : int =
         let mutable regs: Registers = Map.empty |> Map.add R0 0 (* Init with R0 register *)
         
-        (* For each formal parameter, load in the given argument 
-           TODO: Maybe add proper error handling *)
+        (* For each formal parameter, load in the given argument *)
         (regArgs, valArgs) ||> List.iter2 (fun r x -> 
                                             regs <- updateReg r x regs)
         
@@ -474,13 +459,13 @@ let simulate (iHeap : Heap) (prog : RVProg) : (int * Heap) =
               let (blockKey, _) = splitAddr addr
               heap <- heap.Add (blockKey, (ref+1,arr))
               None
-            | CALL (f) -> 
+            | CALL (f,aArgRegs) -> 
               (* Make new register bank, only containing argument registers 
                 Each call we call a SimulateFun function which creates a fresh register bank
-                and only returns the return register, maybe? No need for actual stack, use F# call stack*)
-              let (regArgs, fcode) = lookupFun prog f
-              let valArgs = regArgs |> List.map (fun r -> lookupReg r regs)
-              let retVal = simulateFun (regArgs, fcode) valArgs
+                and only returns the return register, use F# call stack*)
+              let (fArgRegs, fcode) = lookupFun prog f (* Lookup formal parameter register names*)
+              let valArgs = aArgRegs |> List.map (fun r -> lookupReg r regs) (* Lookup values of actual parameters *)
+              let retVal = simulateFun (fArgRegs, fcode) valArgs
               regs <- updateReg Rret retVal regs
               None
             | RET -> Some labRet
@@ -517,59 +502,3 @@ let runTest (prog : Prog) (pname : string) =
     if resC = resI then
          printfn "Sucess! Test: %s, result: %i" pname resC
     else printfn "Fail... Test: %s, expected %i, got %i" pname resI resC
-
-
-(*
-let compareInterpCompArray (lst, t) c = 
-    let interpArr = List.toArray lst
-    let interpLen = match interpArr[0] with 
-                    | IntVal i -> i 
-                    | _ -> failwith (sprintf "Non integer in size header of array: %A" interpArr)
-
-    let (compArr, _) = lookUpHeap c
-    let compLen = compArr[0]
-
-    if not (compLen = interpLen) then 
-      printfn "Failed. Different length of arrays\nInterpretor: %A\nCompiler: %A" interpArr compArr
-    else 
-      for i = 1 to compLen do
-        match (interpArr[i], compArr[i]) with
-        | (IntVal i, c) when i = c -> ()
-        | (IntVal i, c) -> printfn "Failed. Mismatch in arrays\nInterpretor: %A\nCompiler: %A" interpArr compArr
-        | (ArrayVal (_,_), _) -> () (* TODO: implement compariosn of 2D arrays *)
-      printfn "Succes! Result: %A" interpArr
-      
-(* Compare result from interpretor and compiler*)
-let compareCompInterp (e : TypedExp) =
-    let ivtab : VarTableI = empty()
-    let iftab : FunTable  = empty()
-    let interpRes = evalExp e ivtab iftab
-
-    let compRes = compileSimulate e
-
-    match (interpRes, compRes) with
-    | (IntVal i, c) when i = c -> printfn "Succes! Result: %i" i
-    | (IntVal i, c)            -> printfn "Failed. interpretor: %i, compiler: %i" i c
-    | (ArrayVal (lst, t), c)   -> compareInterpCompArray (lst, t) c
-
-let e1 = Plus(Constant(IntVal 4), Constant(IntVal 20))
-let e2 = ArrayLit((List.init 5 (fun x -> Constant(IntVal x))), Int)
-let e3 = Let("a", e2, Index("a", Constant(IntVal 3), Int))
-let e4 = Length(e2, Array(Int))
-let e5 = Let("a", e2, Let("b", e2, Plus(Index("a", Constant(IntVal 2), Int), Index("b", Constant(IntVal 4), Int) )))
-
-compareCompInterp e1
-compareCompInterp e2
-compareCompInterp e3
-compareCompInterp e4
-compareCompInterp e5
-
-let addFun = FunDec("add", Int, [Param("a", Int); Param("b", Int)],
-                    Plus(Var("a"), Var("b")))
-
-let eAdd = Apply("add", [Constant(IntVal 10); Constant(IntVal 32)])
-
-let ftab = bind "add" addFun (empty())
-let res = evalExp eAdd (empty()) ftab
-printfn "Interpreter result: %A" res
-*)

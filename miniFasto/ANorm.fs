@@ -23,103 +23,15 @@ and ANorm =
 type AFunDec = AFunDec of fname * Type * Param list * ANorm
 type AProg = AFunDec list
 
-(* Check if an anf contains any function calls, helper function for cIO*)
-let rec hasApply (a : ANorm) : bool =
-    match a with
-    | LetA (_,_,ApplyA(_,_),_) -> true
-    | LetA (_,_,_,body) -> hasApply body
-    | _ -> false
+(* ----------------------------------------------------------------------- *)
 
-(* Check if a computation may contain IO (side effects). 
-   Computations with side effects cannot be removed in dead binding elimination*)
-let cIO (c : AComp) : bool =
-  match c with
-  | ApplyA(_,_) -> true (* Functions may contain calls to IO functions in real fasto*)
-  | IfA(_,b1,b2) -> hasApply b1 || hasApply b2 (* IfA only contains IO if at least one branch does *)
-  | MapA(_,body,_,_,_) -> hasApply body
-  | _ -> false
-
-
-(* Set of live variables, used to analyze when we can add drops *)
-type LiveSet = Set<vname>
-
-(* Make a single AVal into a liveset, numeric constants will result in an empty liveset *)
-let varsAVal (v : AVal) : LiveSet =
-    match v with
-    | V vn -> Set.singleton vn
-    | N _ -> Set.empty
-
-let varsAValList (vs : AVal list) : LiveSet =
-    vs |> List.fold (fun acc v -> Set.union acc (varsAVal v)) Set.empty
-
-(* Get the free variables of an anf branch, 
-  used for generating the live variables in branch computations such as if-else and map*)
-let rec getFreeVarsANorm (a : ANorm) : LiveSet =
-    match a with
-    | ValueA v -> varsAVal v(* Dont add constants *)
-    (* fv(let x = a1 in a2) = fv(a1) U (fv(a2) \ {x}) *)
-    | LetA (id,_, c, body) ->
-      let cVars = getVarsComp c
-      let bFree = getFreeVarsANorm body |> Set.remove id
-      Set.union cVars bFree
-    | IncA (_,body) | DecA (_,_,body) -> getFreeVarsANorm body
-
-(* Function for returning all the used variable names of a computation for generating livesets
-   in the case of branching computations we only add the free variables *)
-and getVarsComp (c : AComp) : LiveSet =
-    match c with
-    | ApplyA (_,vals)  -> varsAValList vals 
-    | AddA (v1,v2)     -> varsAValList [v1;v2]
-    | ArrLitA(vals,_)  -> varsAValList vals
-    | IndexA (arr,i,_) -> varsAValList [arr;i]
-    | LenA (arr)       -> varsAVal arr
-
-    (* Look for free variables in the bodies of control flow nodes, 
-       in addition to immediate AVals *)
-    | IfA (g,b1,b2) -> Set.union (getFreeVarsANorm b1) (getFreeVarsANorm b2) 
-                        |> Set.union (varsAVal g)
-    | MapA (_,body,arr,_,_) -> Set.union (getFreeVarsANorm body) (varsAVal arr)
-
-(* Check if a variable name is an array, used in analyse to sort out non array variables *)
-let isArray (v : string) (tab : SymTab<Type>) : bool =
-    match lookup v tab with
-    | Some tp -> tp <> Int
-    | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)
-
-(* Get the dimensions of an array type *)
-let rec getDims (t : Type) : int =
-    match t with 
-    | Int -> 0
-    | Array tp -> 1 + getDims tp
-
-(* Variable type table, used to propperly decrement variables *)
-type TypeTable = SymTab<Type>
-
-(* Add the type of any new vars of an anf node to the Type Table*)
-let addVarsTT (a : ANorm) (ttab : TypeTable) : TypeTable =
-    match a with 
-    | LetA (id, tp, c, _) ->
-      (* Add the id to the type tab*)
-      let ttab1 = bind id tp ttab
-      (* in case the computation contains an anonymus function also add the parameter *)
-      match c with 
-      | MapA(Param(arg,argtp),_,_,_,_) -> ttab1 |> bind arg argtp 
-      | _ -> ttab1
-    | _ -> ttab
-
-(* Insert decrements for each array variable in the set, around an anf node
-   Dont insert decs for integeres *)
-let insertDecs (dead : LiveSet) (anfVtab : TypeTable) (body : ANorm) : ANorm =
-    dead
-    |> Set.fold (fun a v ->
-        let dims = match lookup v anfVtab with
-                    | Some tp -> getDims tp
-                    | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)
-        if dims = 0 then a (* Dont decrement integer variables *)
-        else DecA (v,dims,a)) body
+(* Flattener, flattens an expression into A-Normal form*)
 
 (* Vartable map: SL id, (Anorm val, type)*)
-type VarTableA = Map<string, AVal * Type>
+type VarTableA = Map<vname, AVal * Type>
+(* We create a function table to be used in flat, in order to get typed lets for the case of Apply.
+   As well as looking up the type of expressions. *)
+type FunTableA = Map<fname, Type>
 let lookupVal (vn : string) (vtab : VarTableA) =
     match vtab |> Map.tryFind vn with
     | Some (v,_) -> v
@@ -133,25 +45,17 @@ let lookupType (vn : string) (vtab : VarTableA) =
 let bindVar (vn : string) (vt : AVal * Type) (vtab : VarTableA) =
     vtab |> Map.add vn vt
 
-(* We create a function table to be used in flat, in order to get typed lets for the case of Apply
-   As well as seeing what arguments are arrays, to be used in analyse *)
-type FTTable = Map<string, Type * Type list>
-let lookupFRet (fn : string) (ftab : FTTable) =
+let lookupFRet (fn : string) (ftab : FunTableA) =
     match ftab |> Map.tryFind fn with
-    | Some (t,_) -> t
+    | Some t -> t
     | None -> failwith (sprintf "Unkown function in FTable: %s" fn)
-let lookupFParamTypes (fn : string) (ftab : FTTable) =
-    match ftab |> Map.tryFind fn with
-    | Some (_,ts) -> ts
-    | None -> failwith (sprintf "Unkown function in FTable: %s" fn)
-let getRetTab (prog:Prog) : FTTable =
-    prog |> List.fold (fun tab (FunDec(fid, rt, parms, _)) ->
-              let parmTps = parms |> List.map (fun (Param (_,t)) -> t) 
-              Map.add fid (rt,parmTps) tab) Map.empty
+let getRetTab (prog:Prog) : FunTableA =
+    prog |> List.fold (fun tab (FunDec(fid, rt, _, _)) ->
+              Map.add fid rt tab) Map.empty
 
 (* Helper function to get type of an expression, 
    minimal since we can use the actual type checker of fasto when moving the implementation *)
-let rec getTypeExp (e : TypedExp) (vtab : VarTableA) (rtab : FTTable) : Type =
+let rec getTypeExp (e : Exp) (vtab : VarTableA) (ftab : FunTableA) : Type =
     match e with
     | Constant v -> valueType v
     | Var v -> 
@@ -161,17 +65,22 @@ let rec getTypeExp (e : TypedExp) (vtab : VarTableA) (rtab : FTTable) : Type =
     | Let (x,e1,e2) ->
       (* Just input an arbitrary AVal to the vtab, we just need types here, 
          and since this vtab will not be returned its fine*)
-      let vtab1 = bindVar x (V x, getTypeExp e1 vtab rtab) vtab
-      getTypeExp e2 vtab1 rtab
+      let vtab1 = bindVar x (V x, getTypeExp e1 vtab ftab) vtab
+      getTypeExp e2 vtab1 ftab
     | Index (_,_,tp) -> tp
     | Length (_) -> Int
     (* We assume bot branches of if return the same type*)
-    | If (_,e1,_) -> getTypeExp e1 vtab rtab
-    | Apply (f,_) -> lookupFRet f rtab
+    | If (_,e1,_) -> getTypeExp e1 vtab ftab
+    | Apply (f,_) -> lookupFRet f ftab
     | Map (_,_,_,_,tp) -> tp
 
-(* K is continuation function *)
-let rec flat (e : TypedExp) (vtab : VarTableA) (ftab : FTTable) (k : AVal -> ANorm): ANorm =
+(* flatten an expression, arguments:
+   e: an expression
+   vtab: SL variable table with an anf value and type
+   ftab: function table with return and argument types
+   k: a continuation function
+   returns an anf tree*)
+let rec flat (e : Exp) (vtab : VarTableA) (ftab : FunTableA) (k : AVal -> ANorm): ANorm =
     match e with
     | Constant (IntVal n) ->
       k (N n)
@@ -196,8 +105,7 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (ftab : FTTable) (k : AVal -> ANo
 
     | Plus(e1, e2) ->
       (* we use the continuation function to recursivly compile each expression 
-        and put it together in a let in the end 
-        This is the only place we need to update the variable type table *)
+        and put it together in a let in the end *)
       flat e1 vtab ftab (fun l ->
           flat e2 vtab ftab (fun r ->
               let t = newVar "t" 
@@ -205,7 +113,7 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (ftab : FTTable) (k : AVal -> ANo
 
     | Let(id, e1, e2) ->
       (* call recursivly on e2 with the value from e1, no actual
-        LetA types to ensure copy and constant propagation *)
+        LetA nodes to ensure copy and constant propagation *)
       flat e1 vtab ftab (fun v1 ->
           let idtp = getTypeExp e1 vtab ftab
           let vtab1 = bindVar id (v1,idtp) vtab
@@ -226,8 +134,8 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (ftab : FTTable) (k : AVal -> ANo
     | Apply (f, es) -> 
       (* Simmilar approach as array lit, use flatl accumulator function to flatten each element
           make a base function for the final step *)
-      let tp = lookupFRet f ftab
       let letBase (vs : AVal list) =
+        let tp = lookupFRet f ftab
         let t = newVar "fRes"
         let applComp = ApplyA (f, vs)
         LetA (t, tp, applComp, k (V t))
@@ -273,7 +181,7 @@ let rec flat (e : TypedExp) (vtab : VarTableA) (ftab : FTTable) (k : AVal -> ANo
         )
 
 (* accumulator function to flatten a list of expression *)
-and flatl (es : TypedExp list) (vtab : VarTableA) (ftab : FTTable) (acc : AVal list -> ANorm): ANorm =
+and flatl (es : Exp list) (vtab : VarTableA) (ftab : FunTableA) (acc : AVal list -> ANorm): ANorm =
     match es with 
     | [] -> acc []
     | e::rst ->
@@ -281,59 +189,153 @@ and flatl (es : TypedExp list) (vtab : VarTableA) (ftab : FTTable) (acc : AVal l
           flatl rst vtab ftab (fun vs ->
               acc (v::vs)))
 
-(* Analyse an anf, inserting inc and dec*)
-let rec analyse (a : ANorm) (liveAfter : LiveSet) (ttab : TypeTable) (useFlag : bool) : ANorm * LiveSet =
+(* ----------------------------------------------------------------------- *)
+(* Live set calculation functions *)
+
+(* Set of live variables, used to analyze when we can add drops *)
+type LiveSet = Set<vname>
+
+(* Make a single AVal into a liveset, numeric constants will result in an empty liveset *)
+let varsAVal (v : AVal) : LiveSet =
+    match v with
+    | V vn -> Set.singleton vn
+    | N _ -> Set.empty
+
+let varsAValList (vs : AVal list) : LiveSet =
+    vs |> List.fold (fun acc v -> Set.union acc (varsAVal v)) Set.empty
+
+(* Get the free variables of an anf branch, 
+  used for generating the live variables in branch computations such as if-else and map*)
+let rec getFreeVarsANorm (a : ANorm) : LiveSet =
+    match a with
+    | ValueA v -> varsAVal v(* Dont add constants *)
+    (* fv(let x = a1 in a2) = fv(a1) U (fv(a2) \ {x}) *)
+    | LetA (id,_, c, body) ->
+      let cVars = getVarsComp c
+      let bFree = getFreeVarsANorm body |> Set.remove id
+      Set.union cVars bFree
+    | IncA (_,body) | DecA (_,_,body) -> failwith "Inc or Dec present in anf tree, getFreeVarsANorm"
+
+(* Function for returning all the used variable names of a computation for generating livesets
+   in the case of branching computations we only add the free variables *)
+and getVarsComp (c : AComp) : LiveSet =
+    match c with
+    | ApplyA (_,vals)  -> varsAValList vals 
+    | AddA (v1,v2)     -> varsAValList [v1;v2]
+    | ArrLitA(vals,_)  -> varsAValList vals
+    | IndexA (arr,i,_) -> varsAValList [arr;i]
+    | LenA (arr)       -> varsAVal arr
+
+    (* Look for free variables in the bodies of control flow nodes, 
+       in addition to immediate AVals *)
+    | IfA (g,b1,b2) -> Set.union (getFreeVarsANorm b1) (getFreeVarsANorm b2) 
+                        |> Set.union (varsAVal g)
+    | MapA (_,body,arr,_,_) -> Set.union (getFreeVarsANorm body) (varsAVal arr)
+
+(* ----------------------------------------------------------------------- *)
+(* Dead binding elimination helper functions *)
+
+(* Check if an anf contains any function calls, helper function for cIO*)
+let rec hasApply (a : ANorm) : bool =
+    match a with
+    | LetA (_,_,ApplyA(_,_),_) -> true
+    | LetA (_,_,_,body) -> hasApply body
+    | IncA _ | DecA _ -> failwith "Inc or Dec present in anf tree, hasApply"
+    | ValueA _ -> false
+
+(* Check if a computation may contain IO (side effects). 
+   Computations with side effects cannot be removed in dead binding elimination*)
+let cIO (c : AComp) : bool =
+  match c with
+  | ApplyA(_,_) -> true (* Functions may contain calls to IO functions in real fasto*)
+  | IfA(_,b1,b2) -> hasApply b1 || hasApply b2 (* IfA only contains IO if at least one branch does *)
+  | MapA(_,body,_,_,_) -> hasApply body
+  | _ -> false
+
+(* ----------------------------------------------------------------------- *)
+(* Helper functions for annotating anf tree with decrements*)
+
+(* Variable type table, used to propperly decrement variables *)
+type TypeTable = Map<vname,Type>
+
+(* Get the dimensions of an array type *)
+let rec getDims (t : Type) : int =
+    match t with 
+    | Int -> 0
+    | Array tp -> 1 + getDims tp
+
+(* Insert decrements for each array variable in the set, around an anf node
+   Dont insert decs for integeres *)
+let insertDecs (dead : LiveSet) (ttab : TypeTable) (body : ANorm) : ANorm =
+    dead
+    |> Set.fold (fun a v ->
+        let dims = match Map.tryFind v ttab with
+                    | Some tp -> getDims tp
+                    | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)
+        if dims = 0 then a (* Dont decrement integer variables *)
+        else DecA (v,dims,a)) body
+
+let insertIncs (copied : LiveSet) (ttab : TypeTable) (A : ANorm) : ANorm =
+    copied
+    |> Set.fold (fun a v ->
+        let dims = match Map.tryFind v ttab with
+                    | Some tp -> getDims tp
+                    | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)
+        if dims = 0 then a (* Dont decrement integer variables *)
+        else IncA (v,a)) A
+
+(* ----------------------------------------------------------------------- *)
+(* Analyser, annotate anf tree with decrements and increments *)
+
+(* Analyse an anf, arguments:
+   a : Anf tree/subtree
+   liveAfter : Variables that are live after the entire subtree
+   ttab : A type table, used to add dimensions to the decrements as well as filtering out integers 
+   useFlag : States wheather the result of the anf tree will be used
+   returns the annotated subtree along with the corresponding liveset *)
+let rec analyse (a : ANorm) (liveAbove : LiveSet) (ttab : TypeTable) (useFlag : bool) : ANorm * LiveSet =
   match a with 
-  | ValueA (N _) -> a, liveAfter
+  | ValueA (N _) -> a, liveAbove
   | ValueA (V x) -> 
-    let isLiveAfter = liveAfter.Contains x
-    (* We only add x to the liveset if its live after, an array and the result is used *)
-    match lookup x ttab with
-    | Some tp ->  
-      match tp <> Int, isLiveAfter, useFlag with
-      (* The array is copied as the result of the branch, and the array is still live, so we need to increment*)
-      | true,true,true -> IncA (x,a), liveAfter
-      (* Live after but not copied. Already present in the liveset, no change needed *)
-      | true,true,false -> a, liveAfter
-      (* Dead after, but is copied, so we have to keep it live. Add to liveset *)
-      | true,false,true -> a, liveAfter.Add x
-      (* Not copied and also dead after, value is never used so can just replace with zero *)
-      | true,false,false -> ValueA(N 0), liveAfter
-      (* Not an array, but we still add to liveset in order to ensure we dont remove bindings that create this *)
-      | _ -> a, liveAfter.Add x
-    | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" x)
+    if useFlag then (* The value within the variable will be used after this sub-tree has finished executing *)
+      (* the value within x is needed, add it to the liveset *)
+      let liveIn = liveAbove.Add x
+      (* If x is live after the sub-tree, and it's value is needed, increment if x is an array *)
+      match Map.tryFind x ttab with
+      | Some tp when tp <> Int && liveAbove.Contains x -> IncA (x,a), liveIn
+      | _ -> a, liveIn
+    else
+      (* The result of the tree is unused, so we can replace the variable with 0
+         Even if x is still live after, it is already included in the liveAfter set*)
+      ValueA (N 0), liveAbove
   | LetA (id, tp, c, body) ->
-      (* Add to the variable type table before calling recursivly *)
-      let ttab1 = addVarsTT a ttab
+      (* Build the type table while going top down trough the tree *)
+      let ttab1 = Map.add id tp ttab
       (* Get the liveSet from the body of the let, if the variables from the let's computation 
         dont exist in the body's liveset, they are used for the last time here and we can drop them*)
-      let body1, liveOut = analyse body liveAfter ttab1 useFlag
+      let body1, liveBelow = analyse body liveAbove ttab1 useFlag
       (* Check if the assigned variable is used, otherwise we can remove this node. Dead binding elimination *)
-      let deadBinding = not (liveOut.Contains id)
+      let deadBinding = not (liveBelow.Contains id)
       (* If we have a dead binding and our computation is sure to have no side effects, 
           we can remove this node form the tree*)
       if deadBinding && not (cIO c) then
-        body1, liveOut
+        body1, liveBelow
       else
+      (* Compute sets: *)
       (* Get vars used in the computation (Gen set) *)
       let compLive = getVarsComp c
       (* Dead variables are the ones used in this node, but not live after*)
-      let dead = Set.difference compLive liveOut
-
-      (* Insert a dec for each of these variables *)
-      let decbody = insertDecs dead ttab1 body1
-      (* the new let with drops, and the body's live variable + comp's variables *)
-      let Let = LetA (id, tp, c, decbody) 
+      let dead = Set.difference compLive liveBelow
       (* LiveIn is compLive U (liveOut \ kill)*)
-      let liveIn = Set.union compLive (liveOut |> Set.remove id)
+      let liveIn = Set.union compLive (liveBelow |> Set.remove id)
 
       (* Some computations require extra steps:*)
       match c with
       (* If statements might need extra decrements, if a variable is used for the last time in only one branch*)
       | IfA (g,b1,b2) -> 
         (* Call recursivly on each branch *)
-        let b1body, b1Live = analyse b1 liveOut ttab1 (not deadBinding) // Give the flag depending on weather id is used after
-        let b2body, b2Live = analyse b2 liveOut ttab1 (not deadBinding)
+        let b1body, b1Live = analyse b1 liveBelow ttab1 (not deadBinding) // Give the flag depending on weather id is used after
+        let b2body, b2Live = analyse b2 liveBelow ttab1 (not deadBinding)
 
         (* Get the free variables from each branch *)
         let b1Free = getFreeVarsANorm b1
@@ -341,15 +343,15 @@ let rec analyse (a : ANorm) (liveAfter : LiveSet) (ttab : TypeTable) (useFlag : 
         (* Free Variables used only in one branch and not needed afterwards
             won't be decremented by the recursive analyse call in the other branch.
             We compute them here to insert the missing decrements explicitly.*)
-        let b1dead = Set.difference (Set.difference b1Free b2Free) liveOut
-        let b2dead = Set.difference (Set.difference b2Free b1Free) liveOut
+        let b1dead = Set.difference (Set.difference b1Free b2Free) liveBelow
+        let b2dead = Set.difference (Set.difference b2Free b1Free) liveBelow
 
         let b1dec = insertDecs b2dead ttab1 b1body
         let b2dec = insertDecs b1dead ttab1 b2body
         let decIf = IfA (g, b1dec, b2dec)
 
         (* Check if the guard is dead, if so insert a dec *)
-        let decBodyGuard = Set.difference (varsAVal g) liveOut |> fun gSet -> insertDecs gSet ttab body1 
+        let decBodyGuard = Set.difference (varsAVal g) liveBelow |> fun gSet -> insertDecs gSet ttab body1 
 
         LetA (id, tp, decIf, decBodyGuard), liveIn
 
@@ -367,57 +369,76 @@ let rec analyse (a : ANorm) (liveAfter : LiveSet) (ttab : TypeTable) (useFlag : 
           |> List.fold (fun map arg -> 
               map |> Map.change arg (function
                 | Some n -> Some (n+1)
-                | None -> 
+                | None -> Some 1(*
                   (* We only care about array variables *)
-                  if isArray arg ttab1
-                  then Some 1 else None)) Map.empty
+                  match Map.tryFind arg ttab1 with
+                  | Some tp when tp <> Int -> Some 1
+                  | Some _ -> None
+                  | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" arg)*)
+                  )) Map.empty
 
           (* If the argument is dead after, decrement the count *)
           |> Map.map (fun arg n -> if dead.Contains arg then n-1 else n) 
           (* Turn this back into a list, with duplicates corresponding to the count*)
           |> Map.fold (fun lst arg n -> lst @ List.replicate n arg) []
           (* Add increments *)
-          |> List.fold (fun A v -> 
-              match lookup v ttab1 with 
+          |> List.fold (fun A v -> insertIncs (Set.singleton v) ttab1 A (*List.fold (fun A v -> 
+              match Map.tryFind v ttab1 with 
               | Some _ -> IncA (v, A)
-              | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v) ) 
+              | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)*) ) 
               (LetA (id, tp, c, body1))
         incrLet, liveIn
-
-      (* For index we might need to increment if we are accessing an element in a 2d array*)
-      | IndexA(_,_,t) when t<>Int ->
-        (* Increment the new variable that was assigned in the let, 
-            as this contains the copied pointer to the array*)
-        let incrBody = IncA(id, decbody)
-        LetA (id, tp, c, incrBody), liveIn
       | MapA(Param(arg,argtp), fbody, arr, arInT, arOutT) ->
         (* Get the free variables used in the lambda function, we dont want these to be decremented in each iteration of the loop*)
         let freeVars = getFreeVarsANorm fbody
         (* Analyse the body, but add the freeVars to the liveAfter set to ensure they dont get decremented
             We also give a true useFlag as any array pointers might be copied to a new array *)
-        let fbody1, _ = analyse fbody (Set.union liveOut freeVars) ttab1 true 
+        let ttab2 = ttab1 |> Map.add arg argtp (* Add the map's paramater to the type table *)
+        let fbody1, _ = analyse fbody (Set.union liveBelow freeVars) ttab2 true 
         (* After the map, we want to decrement any of the freeVars that was used last time in the lambda func
             as well as the map's parameter. Remove the lambdas parameter, this should not be decremented. *)
-        let deadMap = Set.difference (varsAVal arr |> Set.union freeVars) liveOut |> Set.remove arg
+        let deadMap = Set.difference (varsAVal arr |> Set.union freeVars) liveBelow |> Set.remove arg
         (* Insert a dec for each of these variables *)
-        let decbodyMap = insertDecs deadMap ttab1 body1
+        let decbodyMap = insertDecs deadMap ttab2 body1
         let mapComp = MapA(Param(arg,argtp), fbody1, arr, arInT, arOutT)
         LetA(id, tp, mapComp, decbodyMap), liveIn
 
-      | _ -> Let, liveIn
+      (* For index we might need to increment if we are accessing an element in a 2d array*)
+      | IndexA(_,_,t) when t<>Int ->
+        (* Decrement dead variables and increment the new variable that was assigned in the let, 
+            as this contains the copied pointer to the array*)
+        let incrBody = IncA(id, insertDecs dead ttab1 body1)
+        LetA (id, tp, c, incrBody), liveIn
+      | LenA(_) | AddA(_,_) | IndexA(_,_,_) -> (* Len, plus and index in 1d array requires no special steps. *)
+        (* Insert a dec for each dead variable *)
+        let decbody = insertDecs dead ttab1 body1
+        (* the new let with drops, and the body's live variable + comp's variables *)
+        LetA (id, tp, c, decbody) , liveIn
+
   | DecA (_,_,_) -> failwith "Decrement already present in anf in analyse"
   | IncA (_,_) -> failwith "Increment already present in anf in analyse"
 
 
 (* Make a FunDec into anf (AFunDec) *)
-let anfFun (fn : FunDec) (ftab : FTTable): AFunDec =
+let anfFun (fn : FunDec) (ftab : FunTableA): AFunDec =
     let (FunDec (fname, tp, args, exp)) = fn
 
-    (* Make a VarTable for flat and a TypeTable for analyse *)
-    let argVtab, ttab =
-      args |> List.fold (fun (vtab,ttab) (Param(arg,t)) ->
-              (bindVar arg (V arg, t) vtab,bind arg t ttab)) (Map.empty,empty())
+    (* 1.  Generate fresh ANF names for every source parameter
+       2.  Create two symbol tables while we go:
+           argVtab: maps SL names to their fresh ANF AVals
+           ttab:    maps fresh ANF names to their types
+       We accumulate the freshly-named parameter list in Aargs.*)
+    let Aargs, argVtab, ttab =
+        args
+        |> List.fold
+            (fun (alst, vtab, ttab) (Param (arg, t)) ->
+                let arg1 = newVar "arg"
 
+                let alst1 = alst @ [ Param (arg1, t) ]
+                let vtab1 = bindVar arg (V arg1, t) vtab
+                let ttab1 = Map.add arg1 t ttab
+                (alst1, vtab1, ttab1)
+            ) ([], Map.empty, Map.empty)
     (* Flatten the expression to a-normal form *) 
     let anf = flat exp argVtab ftab (fun v -> ValueA v)
 
@@ -425,14 +446,14 @@ let anfFun (fn : FunDec) (ftab : FTTable): AFunDec =
     let anf1, live = analyse anf Set.empty ttab true
 
     (* Get a set of all the function arguments *)
-    let argSet = args |> List.fold (fun set (Param(arg,_)) -> set |> Set.add arg) Set.empty 
+    let argSet = ttab |> Map.fold (fun set arg _ -> set |> Set.add arg) Set.empty 
     (* Check if any function arguments are unused *)
     let dead = Set.difference argSet live
     (* Insert a decr for each dead var *)
     let anf2 = insertDecs dead ttab anf1
 
     (* fun name * arg names * analyzed anf body *)
-    AFunDec (fname, tp, args, anf2) 
+    AFunDec (fname, tp, Aargs, anf2) 
 
 (* Make program into AProg *)
 let anfProg (prog : Prog) : AProg =
@@ -440,12 +461,14 @@ let anfProg (prog : Prog) : AProg =
     counter <- 1
     List.map (fun fn -> anfFun fn ftab) prog 
 
+(* ----------------------------------------------------------------------- *)
+(* Code generator, converting an anf tree into machine code *)
 
 (* Generate Risc-v code from A normal form, split into three for the different types *)
 let rec genVal (v : AVal) (vtab : VarTableC) (place : reg) : PseudoRV list =
     match v with 
     | N n -> [ LI (place, n)]
-    | V var -> match lookup var vtab with
+    | V var -> match Map.tryFind var vtab with
                 | Some r -> [ MV (place, r) ]
                 | None -> failwith (sprintf "Unkown variable %s" var)
 and genComp (c : AComp) (vtab : VarTableC) (place : reg) : PseudoRV list =
@@ -504,15 +527,12 @@ and genComp (c : AComp) (vtab : VarTableC) (place : reg) : PseudoRV list =
       code1 @ [ LW(place, arrAddr, 0) ]
 
     | ApplyA (id, args) -> 
-      (* Generate each argument into its own temporary register, then move them all to the argument registers
-         We use temporary registers as well to avoid overwriting when using recursive functions*)
-      let argsCode = args
-                    |> List.mapi (fun i a -> 
-                          let t = newReg "argTemp"
-                          (genVal a vtab t) @ [MV (getArgReg i id, t)]
-                          ) 
-                    |> List.concat
-      argsCode @ [CALL id; MV(place, Rret)]
+      (* Generate each argument into its own fresh register, then add them to the CALL union*)
+      let argsCode,regs = args
+                          |> List.fold (fun (code, argR) a -> 
+                          let argReg = newReg (id+"arg")
+                          code@(genVal a vtab argReg),argR@[argReg]) ([],[])
+      argsCode @ [CALL (id,regs); MV(place, Rret)]
 
     | IfA (v, a1, a2) ->
       let thenLabel = newLab "then"
@@ -550,7 +570,7 @@ and genComp (c : AComp) (vtab : VarTableC) (place : reg) : PseudoRV list =
                     ; ADDI (elm1Reg, elm1Reg, 1)
                     ]
       (* Inline the lambda function, add the formal parameter to the vtab *)
-      let vtab1  = bind arg resReg vtab
+      let vtab1  = Map.add arg resReg vtab
       let bodyCode  = gen fbody vtab1 resReg
 
       let storeRes = [ SW (resReg, elm2Reg, 0)
@@ -579,19 +599,19 @@ and gen (a : ANorm) (vtab : VarTableC) (place : reg) : PseudoRV list =
       let t = newReg ("let_" + id)
       (* Gen c and put result in t *)
       let code1 = genComp c vtab t
-      let vtab1 = bind id t vtab
+      let vtab1 = Map.add id t vtab
       (* Gen a with new vtable *)
       let code2 = gen a vtab1 place
       code1 @ code2
 
     | IncA (id, a) -> 
-      let incCode = match lookup id vtab with
+      let incCode = match Map.tryFind id vtab with
                     | Some r -> [ INC r ]
                     | None -> failwith (sprintf "Unkown variable to increment %s" id)
       let code = gen a vtab place
       incCode @ code
     | DecA (id, d, a) ->
-      let decCode = match lookup id vtab with
+      let decCode = match Map.tryFind id vtab with
                     | Some r -> [ DEC (r,d) ]
                     | None -> failwith (sprintf "Unkown variable to decrement %s" id)
       let code = gen a vtab place
@@ -610,7 +630,7 @@ let rec genArgs (args : Param list)
     | (Param (arg, _)::rst) ->
       let argReg = getArgReg argNum fname
       let localReg = newReg ("local_"+fname)
-      let vtab1 = bind arg localReg vtab
+      let vtab1 = Map.add arg localReg vtab
       let (code2,regs,vtab2) = genArgs rst vtab1 (argNum + 1) (argRegs@[argReg]) fname
       [MV (localReg, argReg)] @ code2, regs,vtab2
 
@@ -622,7 +642,7 @@ let genFun (fn : AFunDec) : (string * (reg list * PseudoRV list)) =
     (* Bind each formal argument to the symbolic argument registers 
        We use a list.fold to accumulate the vtable along with a counter 
        for generation of argument registers *)
-    let (prologCode, argRegs,vtab) = genArgs args (empty()) 0 [] fname
+    let (prologCode, argRegs,vtab) = genArgs args Map.empty 0 [] fname
     (* flatten and generate expression using argument registers and place in return register *)
     let fCode = gen A vtab Rret
     fname, (argRegs, [LABEL funLab] @ prologCode @ fCode @ [RET])
@@ -642,6 +662,9 @@ let flatGenSimulate (prog : Prog) : (int * Heap * Type) =
     //printfn "%A" rvProg
     let res,heap = simulate Map.empty rvProg
     res,heap,tp
+
+(* ----------------------------------------------------------------------- *)
+(* Testing functions *)
 
 let rec dimsToType (dims : int) : Type =
     match dims with
