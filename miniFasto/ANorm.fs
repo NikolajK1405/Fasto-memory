@@ -271,7 +271,7 @@ let insertDecs (dead : LiveSet) (ttab : TypeTable) (body : ANorm) : ANorm =
     |> Set.fold (fun a v ->
         let dims = match Map.tryFind v ttab with
                     | Some tp -> getDims tp
-                    | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)
+                    | None -> failwith (sprintf "Unkown variable in ttab in analyse: %s" v)
         if dims = 0 then a (* Dont decrement integer variables *)
         else DecA (v,dims,a)) body
 
@@ -280,7 +280,7 @@ let insertIncs (copied : LiveSet) (ttab : TypeTable) (A : ANorm) : ANorm =
     |> Set.fold (fun a v ->
         let dims = match Map.tryFind v ttab with
                     | Some tp -> getDims tp
-                    | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)
+                    | None -> failwith (sprintf "Unkown variable in ttab in analyse: %s" v)
         if dims = 0 then a (* Dont decrement integer variables *)
         else IncA (v,a)) A
 
@@ -298,11 +298,12 @@ let rec analyse (a : ANorm) (liveAbove : LiveSet) (ttab : TypeTable) (useFlag : 
   | ValueA (N _) -> a, liveAbove
   | ValueA (V x) -> 
     if useFlag then (* The value within the variable will be used after this sub-tree has finished executing *)
-      (* the value within x is needed, add it to the liveset *)
+      (* the value within x is needed, add it to the liveset if not already present *)
       let liveIn = liveAbove.Add x
       (* If x is live after the sub-tree, and it's value is needed, increment if x is an array *)
       match Map.tryFind x ttab with
       | Some tp when tp <> Int && liveAbove.Contains x -> IncA (x,a), liveIn
+      | None -> failwith (sprintf "Unkown variable in ttab in analyse: %s" x)
       | _ -> a, liveIn
     else
       (* The result of the tree is unused, so we can replace the variable with 0
@@ -334,8 +335,8 @@ let rec analyse (a : ANorm) (liveAbove : LiveSet) (ttab : TypeTable) (useFlag : 
       (* If statements might need extra decrements, if a variable is used for the last time in only one branch*)
       | IfA (g,b1,b2) -> 
         (* Call recursivly on each branch *)
-        let b1body, b1Live = analyse b1 liveBelow ttab1 (not deadBinding) // Give the flag depending on weather id is used after
-        let b2body, b2Live = analyse b2 liveBelow ttab1 (not deadBinding)
+        let b1body, _ = analyse b1 liveBelow ttab1 (not deadBinding) // Give the flag depending on weather id is used after
+        let b2body, _ = analyse b2 liveBelow ttab1 (not deadBinding)
 
         (* Get the free variables from each branch *)
         let b1Free = getFreeVarsANorm b1
@@ -350,10 +351,20 @@ let rec analyse (a : ANorm) (liveAbove : LiveSet) (ttab : TypeTable) (useFlag : 
         let b2dec = insertDecs b1dead ttab1 b2body
         let decIf = IfA (g, b1dec, b2dec)
 
-        (* Check if the guard is dead, if so insert a dec *)
-        let decBodyGuard = Set.difference (varsAVal g) liveBelow |> fun gSet -> insertDecs gSet ttab body1 
+        LetA (id, tp, decIf, body1), liveIn
 
-        LetA (id, tp, decIf, decBodyGuard), liveIn
+      | MapA(Param(arg,argtp), fbody, arr, arInT, arOutT) ->
+        (* Analyse the body, but add the compLive to the liveAfter set to ensure they dont get decremented
+            We also give a true useFlag as any array pointers might be copied to a new array *)
+        let ttab2 = ttab1 |> Map.add arg argtp (* Add the map's paramater to the type table *)
+        let fbody1, _ = analyse fbody (Set.union liveBelow compLive) ttab2 (not deadBinding)
+        (* After the map, we want to decrement any of the free variables that was used last time in the lambda func. 
+           Remove the lambdas parameter as this should not be decremented. *)
+        let deadMap = dead |> Set.remove arg
+        (* Insert a dec for each of these variables *)
+        let decbodyMap = insertDecs deadMap ttab2 body1
+        let mapComp = MapA(Param(arg,argtp), fbody1, arr, arInT, arOutT)
+        LetA(id, tp, mapComp, decbodyMap), liveIn
 
   (* Insert increments around an anf node containing a function call,
     for each argument used n times, increment it n-1 times + 1 more if its still live after *)
@@ -369,39 +380,15 @@ let rec analyse (a : ANorm) (liveAbove : LiveSet) (ttab : TypeTable) (useFlag : 
           |> List.fold (fun map arg -> 
               map |> Map.change arg (function
                 | Some n -> Some (n+1)
-                | None -> Some 1(*
-                  (* We only care about array variables *)
-                  match Map.tryFind arg ttab1 with
-                  | Some tp when tp <> Int -> Some 1
-                  | Some _ -> None
-                  | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" arg)*)
-                  )) Map.empty
+                | None -> Some 1)) Map.empty
 
           (* If the argument is dead after, decrement the count *)
           |> Map.map (fun arg n -> if dead.Contains arg then n-1 else n) 
           (* Turn this back into a list, with duplicates corresponding to the count*)
           |> Map.fold (fun lst arg n -> lst @ List.replicate n arg) []
           (* Add increments *)
-          |> List.fold (fun A v -> insertIncs (Set.singleton v) ttab1 A (*List.fold (fun A v -> 
-              match Map.tryFind v ttab1 with 
-              | Some _ -> IncA (v, A)
-              | None -> failwith (sprintf "Unkown variable in anfvtab in analyse: %s" v)*) ) 
-              (LetA (id, tp, c, body1))
+          |> List.fold (fun A v -> insertIncs (Set.singleton v) ttab1 A) (LetA (id, tp, c, body1))
         incrLet, liveIn
-      | MapA(Param(arg,argtp), fbody, arr, arInT, arOutT) ->
-        (* Get the free variables used in the lambda function, we dont want these to be decremented in each iteration of the loop*)
-        let freeVars = getFreeVarsANorm fbody
-        (* Analyse the body, but add the freeVars to the liveAfter set to ensure they dont get decremented
-            We also give a true useFlag as any array pointers might be copied to a new array *)
-        let ttab2 = ttab1 |> Map.add arg argtp (* Add the map's paramater to the type table *)
-        let fbody1, _ = analyse fbody (Set.union liveBelow freeVars) ttab2 true 
-        (* After the map, we want to decrement any of the freeVars that was used last time in the lambda func
-            as well as the map's parameter. Remove the lambdas parameter, this should not be decremented. *)
-        let deadMap = Set.difference (varsAVal arr |> Set.union freeVars) liveBelow |> Set.remove arg
-        (* Insert a dec for each of these variables *)
-        let decbodyMap = insertDecs deadMap ttab2 body1
-        let mapComp = MapA(Param(arg,argtp), fbody1, arr, arInT, arOutT)
-        LetA(id, tp, mapComp, decbodyMap), liveIn
 
       (* For index we might need to increment if we are accessing an element in a 2d array*)
       | IndexA(_,_,t) when t<>Int ->

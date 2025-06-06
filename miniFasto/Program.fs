@@ -691,6 +691,21 @@ let mapProg8 : Prog =
   ))
   ]
 
+let mapProg9 : Prog =
+  [ FunDec ("main", Array Int, [],
+    Let("a", ArrayLit ([Constant(IntVal 0); Constant(IntVal 1)], Int),
+    Let("b", ArrayLit ([Var "a"; Var "a"], Array Int),
+      Map (Param("x",Array Int), Index("a",Constant(IntVal 0),Int), Var "b", Array(Array Int),  Array Int))
+  ))
+  ]
+let mapProg10 : Prog =
+  [ FunDec ("main", Array(Array Int), [],
+    Let("a", ArrayLit ([Constant(IntVal 0); Constant(IntVal 1)], Int),
+    Let("b", ArrayLit ([Var "a"; Var "a"], Array Int),
+      Map (Param("x",Array Int), Var "x", Var "b", Array(Array Int),  Array(Array Int)))
+  ))
+  ]
+
 let shadowProg : Prog =
   [ FunDec ("main", Int, [],
     Let ("a", Constant(IntVal 2),
@@ -734,11 +749,11 @@ let main argv =
     printfn "p unused:\n%s" (unusedProg |> anfProg |> prettyPrintProg)
     printfn "Same array given as two function args:\n%s" (progDup      |> anfProg |> prettyPrintProg)
     printfn "Array is still alive after given as a args:\n%s" (progAfterUse |> anfProg |> prettyPrintProg)
-    printfn "One array dies after function, the other is still live\n%s" (progMix      |> anfProg |> prettyPrintProg)
+    printfn "One array dies after function, the other is still live\n%s" (progMix      |> anfProg |> prettyPrintProg)*)
     printfn "If program: :\n%s" (progIfArrays |> anfProg |> prettyPrintProg)
     printfn "If program: :\n%s" (progIfArraySelect |> anfProg |> prettyPrintProg)
     printfn "If copy program: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg) 
-    printfn "If copy local program: :\n%s" (ifCopyLocalProg |> anfProg |> prettyPrintProg) *)
+    printfn "If copy local program: :\n%s" (ifCopyLocalProg |> anfProg |> prettyPrintProg) 
     runTestA ifCopyLocalProg "0"
     runTestA p5 "1"
     runTestA multiProg "2"
@@ -791,12 +806,17 @@ let main argv =
     runTestA mapProg2 "Map2"
     runTestA mapProg3 "Map3"
     runTestA mapProg4 "Map4"
+    printfn "pp:\n%s" (mapProg5 |> anfProg |> prettyPrintProg)
     runTestA mapProg5 "Map5"
     runTestA mapProg6 "Map6"
     printfn "pp:\n%s" (mapProg7 |> anfProg |> prettyPrintProg)
     runTestA mapProg7 "Map7"
     printfn "pp:\n%s" (mapProg8 |> anfProg |> prettyPrintProg)
     runTestA mapProg8 "Map8"
+    printfn "pp:\n%s" (mapProg9 |> anfProg |> prettyPrintProg)
+    runTestA mapProg9 "Map9"
+    printfn "pp:\n%s" (mapProg10 |> anfProg |> prettyPrintProg)
+    runTestA mapProg10 "Map10"
     runTestA shadowProg "shadow"
     (*printfn "pp:\n%s" (shadowProg |> anfProg |> prettyPrintProg)
     printfn "pp:\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
