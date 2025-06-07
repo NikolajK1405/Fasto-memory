@@ -9,7 +9,7 @@
     <Compile Include="miniFasto.fs"/>
     <Compile Include="ANorm.fs"/>
     <Compile Include="anfpp.fs"/>
-    <Compile Include="Program.fs" />
+    <Compile Include="tests.fs" />
   </ItemGroup>
 
 </Project>

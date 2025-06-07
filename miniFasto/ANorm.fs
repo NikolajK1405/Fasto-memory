@@ -611,7 +611,7 @@ let rec genArgs (args : Param list)
                 (argNum : int) 
                 (argRegs : reg list)
                 (fname: string)
-              : (PseudoRV list * reg list *VarTableC) =
+              : (PseudoRV list * reg list * VarTableC) =
     match args with
     | [] -> ([], argRegs,vtab)
     | (Param (arg, _)::rst) ->
