@@ -743,17 +743,6 @@ let main argv =
     runTestA progIf "If"
     runTestA multiProg "3 funs"
     runTestA progSumDown "Recursive"
-    (*printfn "Recursive:\n%s" (progSumDown |> anfProg |> prettyPrintProg)
-    printfn "e5:\n%s" (p5 |> anfProg |> prettyPrintProg)
-    printfn "p tripple:\n%s" (multiProg |> anfProg |> prettyPrintProg)
-    printfn "p unused:\n%s" (unusedProg |> anfProg |> prettyPrintProg)
-    printfn "Same array given as two function args:\n%s" (progDup      |> anfProg |> prettyPrintProg)
-    printfn "Array is still alive after given as a args:\n%s" (progAfterUse |> anfProg |> prettyPrintProg)
-    printfn "One array dies after function, the other is still live\n%s" (progMix      |> anfProg |> prettyPrintProg)*)
-    printfn "If program: :\n%s" (progIfArrays |> anfProg |> prettyPrintProg)
-    printfn "If program: :\n%s" (progIfArraySelect |> anfProg |> prettyPrintProg)
-    printfn "If copy program: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg) 
-    printfn "If copy local program: :\n%s" (ifCopyLocalProg |> anfProg |> prettyPrintProg) 
     runTestA ifCopyLocalProg "0"
     runTestA p5 "1"
     runTestA multiProg "2"
@@ -763,9 +752,7 @@ let main argv =
     runTestA progMix "6"
     runTestA progIfArrays "7"
     runTestA progIfArraySelect "8"
-    //printfn "pp: :\n%s" (ifelseCopyProg |> anfProg |> prettyPrintProg)
     runTestA ifelseCopyProg "9"
-    //fuzz 100 6   // 100 random programs of (rough) size ≤ 6
     runTestA progDeadLit     "dead-literal"
     runTestA progReturnArr   "return-arr"
     runTestA progPassThru    "pass-through"
@@ -774,7 +761,6 @@ let main argv =
     runTestA progShadow      "shadowing"
     runTestA progRecArr      "rec-array"
     runTestA progManyUses    "multi-use"
-    //printfn "If copy program: :\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
     runTestA prog2DDeadLit     "2d-dead-lit"
     runTestA prog2DReturn      "2d-return"
     runTestA prog2DPassThru    "2d-pass-thru"
@@ -796,33 +782,15 @@ let main argv =
     runTestA prog4DPassThru    "4d-pass-thru"
     runTestA prog4DNestedIndex "4d-nested-index"
     runTestA prog4DBranch      "4d-branch"
-    (*printfn "pp1:\n%s" (mapProg |> anfProg |> prettyPrintProg)
-    printfn "pp2:\n%s" (mapProg2 |> anfProg |> prettyPrintProg)
-    printfn "pp3:\n%s" (mapProg3 |> anfProg |> prettyPrintProg)
-    printfn "pp4:\n%s" (mapProg4 |> anfProg |> prettyPrintProg)
-    printfn "pp5:\n%s" (mapProg5 |> anfProg |> prettyPrintProg)
-    printfn "pp6:\n%s" (mapProg6 |> anfProg |> prettyPrintProg)*)
     runTestA mapProg "Map1"
     runTestA mapProg2 "Map2"
     runTestA mapProg3 "Map3"
     runTestA mapProg4 "Map4"
-    printfn "pp:\n%s" (mapProg5 |> anfProg |> prettyPrintProg)
     runTestA mapProg5 "Map5"
     runTestA mapProg6 "Map6"
-    printfn "pp:\n%s" (mapProg7 |> anfProg |> prettyPrintProg)
     runTestA mapProg7 "Map7"
-    printfn "pp:\n%s" (mapProg8 |> anfProg |> prettyPrintProg)
     runTestA mapProg8 "Map8"
-    printfn "pp:\n%s" (mapProg9 |> anfProg |> prettyPrintProg)
     runTestA mapProg9 "Map9"
-    printfn "pp:\n%s" (mapProg10 |> anfProg |> prettyPrintProg)
     runTestA mapProg10 "Map10"
     runTestA shadowProg "shadow"
-    (*printfn "pp:\n%s" (shadowProg |> anfProg |> prettyPrintProg)
-    printfn "pp:\n%s" (prog2DDeadLit |> anfProg |> prettyPrintProg)
-    printfn "pp:\n%s" (prog2DReturn |> anfProg |> prettyPrintProg)
-    printfn "pp:\n%s" (prog2DPassThru |> anfProg |> prettyPrintProg)
-    printfn "pp:\n%s" (prog2DNestedIndex |> anfProg |> prettyPrintProg)
-    printfn "pp:\n%s" (prog2DBranch |> anfProg |> prettyPrintProg)
-    printfn "pp:\n%s" (arr2dLiveafter |> anfProg |> prettyPrintProg)*)
     0

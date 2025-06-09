@@ -522,7 +522,9 @@ let rec compileExp  (e      : TypedExp)
                         ]
       n_code
        @ checksize
-       @ allocate (size_reg, place, Int) // Testing allocate
+// Testing allocate, replace with the following for tests to run propperly: 
+//     @ dynalloc (size_reg, place, Int)
+       @ allocate (size_reg, place, Int) 
        @ init_regs
        @ loop_header
        @ loop_iota
