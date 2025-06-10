@@ -90,7 +90,6 @@ let buildProg (funs : (string * Param list * Exp) list)
 
 (* Build program from just an expression *)
 let buildProgExpr (mainBody : Exp) (retType : Type): Prog =
-    // simply wrap the expression in a main function
     [ FunDec("main", retType, [], mainBody) ]
 
 
@@ -125,7 +124,6 @@ let mainFunUnused =
 
 let unusedProg : Prog = [ unusedArgFun; mainFunUnused]
 
-// len(x) + len(y) + len(z)
 let dupLenFun =
     FunDec("dupLen",
            Int,
@@ -135,7 +133,6 @@ let dupLenFun =
            Plus( Length(Var "x"),
                  Plus(Length(Var "y"), Length(Var "z"))))
 
-// main: a duplicated (a is passed twice); a & b never used again
 let mainDup =
     FunDec("main",
            Int,
@@ -148,14 +145,12 @@ let mainDup =
 
 let progDup : Prog = [ dupLenFun; mainDup ]
 
-// return arr[0]
 let firstElemFun =
     FunDec("firstElem",
            Int,
            [ Param("arr", Array Int) ],
            Index("arr", Constant(IntVal 0), Int))
 
-// main: array a is used again (Length) after the call
 let mainAfterUse =
     FunDec("main",
            Int,
@@ -168,7 +163,6 @@ let mainAfterUse =
 
 let progAfterUse : Prog = [ firstElemFun; mainAfterUse ]
 
-// p[0] + q[0]
 let sumHeadsFun =
     FunDec("sumHeads",
            Int,
@@ -191,25 +185,18 @@ let mainMix =
 
 let progMix : Prog = [ sumHeadsFun; mainMix ]
 
-(* ----------------------------------------------------------- *)
-(*  if-arrays example                                          *)
-(* ----------------------------------------------------------- *)
-
-/// then-branch (b1)
 let b1 : Exp =
-    Let("t1", Index("arr1", Constant(IntVal 1), Int),      // t1 = arr1[1]
-    Let("t2", Index("arr3", Constant(IntVal 2), Int),      // t2 = arr3[2]
-    Let("t3", Plus(Var "t1", Var "t2"),                    // t3 = t1 + t2
-        Var "t3")))                                        // result  t3
-
-/// else-branch (b2)
-let b2 : Exp =
-    Let("t1", Index("arr2", Constant(IntVal 2), Int),      // t1 = arr2[2]
-    Let("t2", Index("arr4", Constant(IntVal 1), Int),      // t2 = arr4[1]
-    Let("t3", Plus(Var "t1", Var "t2"),                    // t3 = t1 + t2
+    Let("t1", Index("arr1", Constant(IntVal 1), Int),
+    Let("t2", Index("arr3", Constant(IntVal 2), Int),
+    Let("t3", Plus(Var "t1", Var "t2"),
         Var "t3")))
 
-/// whole body of main
+let b2 : Exp =
+    Let("t1", Index("arr2", Constant(IntVal 2), Int),
+    Let("t2", Index("arr4", Constant(IntVal 1), Int),
+    Let("t3", Plus(Var "t1", Var "t2"),
+        Var "t3")))
+
 let mainBody : Exp =
     Let ("g", Plus (Constant (IntVal 1),Constant (IntVal 1)), 
     Let("arr1", ArrayLit([ Constant(IntVal 1)
@@ -224,19 +211,17 @@ let mainBody : Exp =
     Let("arr4", ArrayLit([ Constant(IntVal 4)
                            Constant(IntVal 5)
                            Constant(IntVal 6) ], Int),
-    Let("x", If(Var "g", b1, b2),                          // x = if g then b1 else b2
-    Let("y", Index("arr4", Constant(IntVal 0), Int),       // y = arr4[0]
-    Let("z", Plus(Var "y", Var "x"),                       // z = y + x
-        Var "z"))))))))                                     // result  z
+    Let("x", If(Var "g", b1, b2),
+    Let("y", Index("arr4", Constant(IntVal 0), Int),
+    Let("z", Plus(Var "y", Var "x"),
+        Var "z"))))))))
 
-/// main g = ...
 let mainIfArrays =
     FunDec("main",
            Int,
            [],    // --> pass 0/1 (false/true) when you run it
            mainBody)
 
-/// whole program
 let progIfArrays : Prog = [ mainIfArrays ]
 
 let ifArraySelect : Exp =
@@ -254,7 +239,6 @@ let ifArraySelect : Exp =
 
 let progIfArraySelect : Prog = buildProgExpr ifArraySelect Int
 
-// array literals
 let yArr : Exp =
     ArrayLit ( [ Constant (IntVal 1)
                  Constant (IntVal 2)
@@ -267,7 +251,6 @@ let zArr : Exp =
                  Constant (IntVal 6) ],
                Int )
 
-// build the nested lets
 let ifelseCopy : Exp =
     Let ("y", yArr,
      Let ("z", zArr,
@@ -278,12 +261,11 @@ let ifelseCopy : Exp =
         Let("p", Plus(Var "u",Var "v"),
         Var "p")))))))
 
-// wrap it in a one-function programme
 let ifelseCopyProg : Prog =
-    [ FunDec ("main",              // function name
-              Int,                 // return type
-              [],                  // no parameters
-              ifelseCopy) ]          // function body
+    [ FunDec ("main",
+              Int,
+              [],
+              ifelseCopy) ]
 
 let progDeadLit : Prog =
   [ FunDec ("main", Int, [],
@@ -356,7 +338,6 @@ let progManyUses : Prog =
 
 let prog2DDeadLit : Prog =
   [ FunDec ("main", Array Int, [],
-      // build a 2×2 literal, then ignore it
       Let("m", ArrayLit(
               [ ArrayLit([Constant(IntVal 1);Constant(IntVal 2)], Int)
               ; ArrayLit([Constant(IntVal 3);Constant(IntVal 4)], Int)
@@ -382,7 +363,6 @@ let prog2DPassThru : Prog =
       Let("m", ArrayLit(
                [ ArrayLit([Constant(IntVal 1);Constant(IntVal 2)], Int) ]
              , Array Int),
-        // pass it through id2D, then take length of first row
         Let("m2", Apply("id2D",[Var "m"]),
           Length(Index("m2", Constant(IntVal 0), Array Int)))))
   ]
@@ -427,13 +407,11 @@ let arr2dLiveafter: Prog =
   )
   ]
 
-// ------------------------------------------------------------
-// 3-D array tests
-// ------------------------------------------------------------
+(* ------------------------------------------------------------
+   3-D array tests *)
 
 let prog3DDeadLit : Prog =
   [ FunDec ("main", Array (Array Int), [],
-      // build a 1×1×1 literal, then slice off its first 2D face
       Let("m3", ArrayLit(
         [ ArrayLit(
             [ ArrayLit([Constant(IntVal 1)], Int) ],
@@ -446,7 +424,6 @@ let prog3DDeadLit : Prog =
 
 let prog3DReturn : Prog =
   [ FunDec ("main", Array (Array (Array Int)), [],
-      // directly return a 1×1×2 literal
       ArrayLit(
         [ ArrayLit(
             [ ArrayLit([Constant(IntVal 2); Constant(IntVal 3)], Int) ],
@@ -492,24 +469,20 @@ let prog3DBranch : Prog =
       Let("g", Constant(IntVal 1),
       Let("r3",
         If(Var "g",
-           // then: build 1×1×1 literal
            ArrayLit(
              [ ArrayLit([ArrayLit([Constant(IntVal 7)], Int)], Array Int) ],
              Array (Array Int)),
-           // else: empty 3-D
            ArrayLit([], Array (Array Int))),
         Let("slice2", Index("r3", Constant(IntVal 0), Array (Array Int)),
       Let("slice1", Index("slice2", Constant(IntVal 0), Array Int),
           Length (Var "slice1"))))))
   ]
 
-// ------------------------------------------------------------
-// 4-D array tests
-// ------------------------------------------------------------
+(* ------------------------------------------------------------
+   4-D array tests *)
 
 let prog4DDeadLit : Prog =
   [ FunDec ("main", Array (Array (Array Int)), [],
-      // build a 1×1×1×1 literal, then slice off its first 3-D block
       Let("m4", ArrayLit(
         [ ArrayLit(
             [ ArrayLit(
@@ -525,7 +498,6 @@ let prog4DDeadLit : Prog =
 
 let prog4DReturn : Prog =
   [ FunDec ("main", Array (Array (Array (Array Int))), [],
-      // directly return a 1×1×1×2 literal
       ArrayLit(
         [ ArrayLit(
             [ ArrayLit(
@@ -649,7 +621,7 @@ let mapProg4 : Prog =
   )
   ]
 
-// Map function: map((fn x -> x), arr) where arr is live after
+(* Map function: map((fn x -> x), arr) where arr is live after*)
 let mapProg5 : Prog =
   [ FunDec ("main", Int, [],
     Let ("a", ArrayLit ([ArrayLit ([Constant(IntVal 0);Constant(IntVal 1);Constant(IntVal 2)], Int);ArrayLit ([Constant(IntVal 1);Constant(IntVal 5);Constant(IntVal 6)], Int)], Array Int),
@@ -714,7 +686,7 @@ let shadowProg : Prog =
     Plus (Var "a", Var "b")))))
   ]
 
-// If branch return a local variable
+(*If branch return a local variable*)
 let ifCopyLocal : Exp =
     Let ("y", yArr,
      Let ("z", zArr,
@@ -725,7 +697,6 @@ let ifCopyLocal : Exp =
         Let("p", Plus(Var "u",Var "v"),
         Var "p")))))))
 
-// wrap it in a one-function programme
 let ifCopyLocalProg : Prog =
     [ FunDec ("main",              // function name
               Int,                 // return type
@@ -767,16 +738,11 @@ let main argv =
     runTestA prog2DNestedIndex "2d-nested-index"
     runTestA prog2DBranch      "2d-branch"
     runTestA arr2dLiveafter    "2d elm still live after"
-
-    // 3D-array tests
-    //printfn "pp: :\n%s" (prog3DDeadLit |> anfProg |> prettyPrintProg)
     runTestA prog3DDeadLit     "3d-dead-lit"
     runTestA prog3DReturn      "3d-return"
     runTestA prog3DPassThru    "3d-pass-thru"
     runTestA prog3DNestedIndex "3d-nested-index"
     runTestA prog3DBranch      "3d-branch"
-
-    // 4D-array tests
     runTestA prog4DDeadLit     "4d-dead-lit"
     runTestA prog4DReturn      "4d-return"
     runTestA prog4DPassThru    "4d-pass-thru"

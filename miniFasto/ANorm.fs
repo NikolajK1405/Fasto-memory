@@ -252,6 +252,12 @@ let cIO (c : AComp) : bool =
   | MapA(_,body,_,_,_) -> hasApply body
   | _ -> false
 
+(* Distinguish branching from flat computations*)
+let isFlatComp (c : AComp) : bool =
+    match c with
+    | IfA (_,_,_) | MapA (_,_,_,_,_) -> false
+    | _ -> true
+
 (* ----------------------------------------------------------------------- *)
 (* Helper functions for annotating anf tree with decrements*)
 
@@ -293,114 +299,120 @@ let insertIncs (copied : LiveSet) (ttab : TypeTable) (A : ANorm) : ANorm =
    ttab : A type table, used to add dimensions to the decrements as well as filtering out integers 
    useFlag : States wheather the result of the anf tree will be used
    returns the annotated subtree along with the corresponding liveset *)
-let rec analyse (a : ANorm) (liveAbove : LiveSet) (ttab : TypeTable) (useFlag : bool) : ANorm * LiveSet =
+let rec analyse (a : ANorm) (usesAfter : LiveSet) (ttab : TypeTable) (useFlag : bool) : ANorm * LiveSet =
   match a with 
-  | ValueA (N _) -> a, liveAbove
+  | ValueA (N _) -> a, usesAfter
   | ValueA (V x) -> 
     if useFlag then (* The value within the variable will be used after this sub-tree has finished executing *)
       (* the value within x is needed, add it to the liveset if not already present *)
-      let liveIn = liveAbove.Add x
+      let uses = usesAfter.Add x
       (* If x is live after the sub-tree, and it's value is needed, increment if x is an array *)
       match Map.tryFind x ttab with
-      | Some tp when tp <> Int && liveAbove.Contains x -> IncA (x,a), liveIn
+      | Some tp when tp <> Int && usesAfter.Contains x -> IncA (x,a), uses
       | None -> failwith (sprintf "Unkown variable in ttab in analyse: %s" x)
-      | _ -> a, liveIn
+      | _ -> a, uses
     else
       (* The result of the tree is unused, so we can replace the variable with 0
-         Even if x is still live after, it is already included in the liveAfter set*)
-      ValueA (N 0), liveAbove
+         Even if x is still live after, it is already included in the usesAfter set*)
+      ValueA (N 0), usesAfter
   | LetA (id, tp, c, body) ->
       (* Build the type table while going top down trough the tree *)
       let ttab1 = Map.add id tp ttab
       (* Get the liveSet from the body of the let, if the variables from the let's computation 
         dont exist in the body's liveset, they are used for the last time here and we can drop them*)
-      let body1, liveBelow = analyse body liveAbove ttab1 useFlag
+      let body1, usesBody = analyse body usesAfter ttab1 useFlag
       (* Check if the assigned variable is used, otherwise we can remove this node. Dead binding elimination *)
-      let deadBinding = not (liveBelow.Contains id)
+      let deadBinding = not (usesBody.Contains id)
       (* If we have a dead binding and our computation is sure to have no side effects, 
           we can remove this node form the tree*)
       if deadBinding && not (cIO c) then
-        body1, liveBelow
+        body1, usesBody
+      (* flat and branching computations requires different approaches*)
+      elif isFlatComp c then
+        (* Compute sets that can be shared for flat computations: *)
+        (* Get vars used in the computation *)
+        let usesC = getVarsComp c
+        (* Dead variables are the ones used in this node, but not live after*)
+        let dead = Set.difference usesC usesBody
+        (* uses is usesC U (usesBody \ id)*)
+        let uses = Set.union usesC (usesBody |> Set.remove id)
+        match c with
+    (* Insert increments around an anf node containing a function call,
+      for each argument used n times, increment it n-1 times + 1 more if its still live after *)
+        | ApplyA (_,args) 
+        | ArrLitA (args,_) -> (* We treat ArrayLit {a,b,c} as a function mkrArr(a,b,c)*)
+          let incrLet =
+            args
+            (* Filter out all non variables and convert these AVals to strings*)
+            |> List.fold (fun lst v -> match v with
+                                        | V vn -> vn::lst
+                                        | N _ -> lst) []
+            (*Create a map that keeps track of how many times each of these variables are used as function arguments*)
+            |> List.fold (fun map arg -> 
+                map |> Map.change arg (function
+                  | Some n -> Some (n+1)
+                  | None -> Some 1)) Map.empty
+
+            (* If the argument is dead after, decrement the count *)
+            |> Map.map (fun arg n -> if dead.Contains arg then n-1 else n) 
+            (* Turn this back into a list, with duplicates corresponding to the count*)
+            |> Map.fold (fun lst arg n -> lst @ List.replicate n arg) []
+            (* Add increments *)
+            |> List.fold (fun A v -> insertIncs (Set.singleton v) ttab1 A) (LetA (id, tp, c, body1))
+          incrLet, uses
+
+        (* For index we might need to increment if we are accessing an element in a 2d array*)
+        | IndexA(_,_,t) when t<>Int ->
+          (* Decrement dead variables and increment the new variable that was assigned in the let, 
+              as this contains the copied pointer to the array*)
+          let incrBody = IncA(id, insertDecs dead ttab1 body1)
+          LetA (id, tp, c, incrBody), uses
+        | LenA(_) | AddA(_,_) | IndexA(_,_,_) -> (* Len, plus and index in 1d array requires no special steps. *)
+          (* Insert a dec for each dead variable *)
+          let decbody = insertDecs dead ttab1 body1
+          (* the new let with drops, and the body's live variable + comp's variables *)
+          LetA (id, tp, c, decbody) , uses
+        | _ -> failwith "unexpected branching computation in analyse"
       else
-      (* Compute sets: *)
-      (* Get vars used in the computation (Gen set) *)
-      let compLive = getVarsComp c
-      (* Dead variables are the ones used in this node, but not live after*)
-      let dead = Set.difference compLive liveBelow
-      (* LiveIn is compLive U (liveOut \ kill)*)
-      let liveIn = Set.union compLive (liveBelow |> Set.remove id)
+        match c with
+        (* If statements might need extra decrements, if a variable is used for the last time in only one branch*)
+        | IfA (g,b1,b2) -> 
+          (* Call recursivly on each branch with uses(s.body)\id, 
+          we remove id since uses(s.body) will become the base of the live set 
+          to get the correct returned liveset usesC(s.def) U (uses(s.body)\id)  *)
+          let b1body, usesB1 = analyse b1 (usesBody.Remove id) ttab1 (not deadBinding) (* Give the flag depending on weather id is used after *)
+          let b2body, usesB2 = analyse b2 (usesBody.Remove id) ttab1 (not deadBinding)
 
-      (* Some computations require extra steps:*)
-      match c with
-      (* If statements might need extra decrements, if a variable is used for the last time in only one branch*)
-      | IfA (g,b1,b2) -> 
-        (* Call recursivly on each branch *)
-        let b1body, _ = analyse b1 liveBelow ttab1 (not deadBinding) // Give the flag depending on weather id is used after
-        let b2body, _ = analyse b2 liveBelow ttab1 (not deadBinding)
+          (* Free Variables used only in one branch and not needed afterwards
+              won't be decremented by the recursive analyse call in the other branch.
+              We compute them here to insert the missing decrements explicitly.*)
+          let b1dead = Set.difference usesB1 usesB2
+          let b2dead = Set.difference usesB2 usesB1
+          let b1dec = insertDecs b2dead ttab1 b1body
+          let b2dec = insertDecs b1dead ttab1 b2body
 
-        (* Get the free variables from each branch *)
-        let b1Free = getFreeVarsANorm b1
-        let b2Free = getFreeVarsANorm b2
-        (* Free Variables used only in one branch and not needed afterwards
-            won't be decremented by the recursive analyse call in the other branch.
-            We compute them here to insert the missing decrements explicitly.*)
-        let b1dead = Set.difference (Set.difference b1Free b2Free) liveBelow
-        let b2dead = Set.difference (Set.difference b2Free b1Free) liveBelow
+          let decIf = IfA (g, b1dec, b2dec)
+          (* No need to add usesBody as they were given to the recursive calls of each branch *)
+          let uses = Set.union usesB1 usesB2 |> Set.union (varsAVal g) 
+          LetA (id, tp, decIf, body1), uses
 
-        let b1dec = insertDecs b2dead ttab1 b1body
-        let b2dec = insertDecs b1dead ttab1 b2body
-        let decIf = IfA (g, b1dec, b2dec)
-
-        LetA (id, tp, decIf, body1), liveIn
-
-      | MapA(Param(arg,argtp), fbody, arr, arInT, arOutT) ->
-        (* Analyse the body, but add the compLive to the liveAfter set to ensure they dont get decremented
-            We also give a true useFlag as any array pointers might be copied to a new array *)
-        let ttab2 = ttab1 |> Map.add arg argtp (* Add the map's paramater to the type table *)
-        let fbody1, _ = analyse fbody (Set.union liveBelow compLive) ttab2 (not deadBinding)
-        (* After the map, we want to decrement any of the free variables that was used last time in the lambda func. 
-           Remove the lambdas parameter as this should not be decremented. *)
-        let deadMap = dead |> Set.remove arg
-        (* Insert a dec for each of these variables *)
-        let decbodyMap = insertDecs deadMap ttab2 body1
-        let mapComp = MapA(Param(arg,argtp), fbody1, arr, arInT, arOutT)
-        LetA(id, tp, mapComp, decbodyMap), liveIn
-
-  (* Insert increments around an anf node containing a function call,
-    for each argument used n times, increment it n-1 times + 1 more if its still live after *)
-      | ApplyA (_,args) 
-      | ArrLitA (args,_) -> (* We treat ArrayLit {a,b,c} as a function mkrArr(a,b,c)*)
-        let incrLet =
-          args
-          (* Filter out all non variables and convert these AVals to strings*)
-          |> List.fold (fun lst v -> match v with
-                                      | V vn -> vn::lst
-                                      | N _ -> lst) []
-          (*Create a map that keeps track of how many times each of these variables are used as function arguments*)
-          |> List.fold (fun map arg -> 
-              map |> Map.change arg (function
-                | Some n -> Some (n+1)
-                | None -> Some 1)) Map.empty
-
-          (* If the argument is dead after, decrement the count *)
-          |> Map.map (fun arg n -> if dead.Contains arg then n-1 else n) 
-          (* Turn this back into a list, with duplicates corresponding to the count*)
-          |> Map.fold (fun lst arg n -> lst @ List.replicate n arg) []
-          (* Add increments *)
-          |> List.fold (fun A v -> insertIncs (Set.singleton v) ttab1 A) (LetA (id, tp, c, body1))
-        incrLet, liveIn
-
-      (* For index we might need to increment if we are accessing an element in a 2d array*)
-      | IndexA(_,_,t) when t<>Int ->
-        (* Decrement dead variables and increment the new variable that was assigned in the let, 
-            as this contains the copied pointer to the array*)
-        let incrBody = IncA(id, insertDecs dead ttab1 body1)
-        LetA (id, tp, c, incrBody), liveIn
-      | LenA(_) | AddA(_,_) | IndexA(_,_,_) -> (* Len, plus and index in 1d array requires no special steps. *)
-        (* Insert a dec for each dead variable *)
-        let decbody = insertDecs dead ttab1 body1
-        (* the new let with drops, and the body's live variable + comp's variables *)
-        LetA (id, tp, c, decbody) , liveIn
+        | MapA(Param(arg,argtp), fbody, arr, arInT, arOutT) ->
+          (* Analyse the body, but add the usesC to the usesAfter set to ensure that no variables from the outer scope gets decremented
+              We also give a true useFlag as any array pointers might be copied to a new array *)
+          let usesC = getVarsComp c
+          let ttab2 = ttab1 |> Map.add arg argtp (* Add the map's paramater to the type table *)
+          let fbody1, usesLoop = analyse fbody (Set.union (usesBody |> Set.remove id) usesC) ttab2 (not deadBinding)
+          (* After the map, we want to decrement any of the free variables that was used last time in the lambda func. 
+            Remove the lambdas parameter as this should not be decremented. *)
+          let dead = Set.difference usesC usesBody
+          let deadMap = dead |> Set.remove arg
+          (* Insert a dec for each of these variables *)
+          let decbodyMap = insertDecs deadMap ttab2 body1
+          let mapComp = MapA(Param(arg,argtp), fbody1, arr, arInT, arOutT)
+          (* Add the applied array to usesLoop, and remove the formal parameter *)
+          let uses = Set.union usesLoop (varsAVal arr)  |> Set.remove arg
+          LetA(id, tp, mapComp, decbodyMap), uses 
+        | _ -> failwith "unexpected non branch in analyse"
 
   | DecA (_,_,_) -> failwith "Decrement already present in anf in analyse"
   | IncA (_,_) -> failwith "Increment already present in anf in analyse"
